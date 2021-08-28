@@ -16,850 +16,549 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#![allow(dead_code)]
+// HINT: Game struct holds many distinct properties
+// together to transport together
+// POSSIBLE: The game struct may be removed
+// if we instead end up immediately making
+// managing message-receiving tasks
+// for all properties
 
-use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+// HINT: Make properties as big as possible while
+// containing entirely similiar attributes that are
+// used together
+// Good e.g. PlayerBodies + PlayerNames => Players
+// Bad e.g. World + Config => Worofig
 
-use std::error::Error;
-use std::result;
-type Result<T> = result::Result<T, Box<dyn Error + Send + Sync>>;
-const IP: &str = "0.0.0.0:25565";
-
-mod network;
-use network::classic;
-
-use classic::chunks::{FlatWorldGenerator, World};
-use classic::BlockIds;
+// HINT: Message passing is god and it's optimised.
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+mod chunks;
+pub mod classic;
+pub mod plugins;
+use classic::*;
+use chunks::{FlatWorldGenerator, World};
+use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
-
-//use classic::heartbeat;
-use classic::{
-  Block, ClassicPacketReader, ClassicPacketServer, /*ClassicPacketBuilder, */ Position,
-  PositionYP,
-};
-#[derive(Clone, Debug)]
-pub struct Message {
-  pub message: String,
-  pub system: bool,
+use tokio::net::{TcpListener, TcpStream};
+pub const ERR_SENDING_RESULT: &str = "Error sending result";
+use std::sync::mpsc as stdmpsc;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio::sync::broadcast;
+use once_cell::sync::Lazy;
+use chrono::Local;
+use env_logger::Builder;
+use log::LevelFilter;
+use std::io::Write;
+pub mod game;
+pub mod settings;
+use game::*;
+use serde::Deserialize;
+#[derive(serde_derive::Deserialize)]
+pub struct ServerOptions {
+  whitelist_enabled: bool,
+  listen_address: String,
+  world_file: String,
+  admin_slot: bool,
+  public: bool,
+  server_name: String,
+  max_players: usize,
+  motd: String,
 }
-// TODO Expand player struct
-#[derive(Clone)]
-pub struct PlayerData {
-  pub position: PositionYP,
-  pub operator: bool,
-  pub block_changes: Vec<Block>,
-  pub chatbox: Vec<Message>,
-  pub incoming_packets: Vec<ClassicPacketServer>,
-}
-#[derive(Clone)]
-pub struct Player {
-  pub name: String,
-  pub data: Arc<Mutex<PlayerData>>,
-}
-pub struct LocalPlayer {
-  pub player: Player,
-  pub id: i8,
-}
-
-// TODO Everything.
-#[derive(Clone)]
-pub struct Game {
-  players: Arc<Mutex<Vec<Player>>>,
-  ops: Arc<Mutex<Vec<String>>>,
-  world: Arc<Mutex<World>>,
-}
-
+static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| settings::get_options());
 #[tokio::main]
-async fn main() -> Result<()> {
-  let generator = FlatWorldGenerator::new(64, BlockIds::DIRT, BlockIds::GRASS, BlockIds::AIR);
-  let world = World::new(generator, 128, 128, 128);
-  let game = Game {
-    players: Arc::new(Mutex::new(vec![])),
-    ops: Arc::new(Mutex::new(vec![
-      "Exopteron".to_string(),
-      "Galaxtone".to_string(),
-    ])),
-    world: Arc::new(Mutex::new(world)),
-  };
-
-  /*   // Heartbeat Thread
-  tokio::spawn(async {
-    let duration = Duration::from_secs(45);
-    loop {
-      println!("Heartbeat!");
-      heartbeat::heartbeat().await?;
-      time::sleep(duration).await;
-    }
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let mut pregmts = PreGMTS::new();
+  pregmts.register_command("ver".to_string(), Box::new(|gmts: CMDGMTS, args, sender| {
+    Box::pin(async move {
+        gmts.chat_to_id(&format!("&aServer is running BetterThanMinecraft v{}.", VERSION), -1, sender).await;
+        0
+    })
+}));
+  if CONFIGURATION.public {}
+/*   pregmts.register_command("G".to_string(), |gmts, args, sender| {
+    log::info!("Hello, {}!", sender);
+    1
   }); */
-
-  listen(game).await.unwrap();
-  Ok(())
-}
-
-pub async fn listen(game: Game) -> Result<()> {
-  let listener = TcpListener::bind(IP).await?;
-  println!("Listening on {}", IP);
-  loop {
-    let (socket, address) = listener.accept().await.unwrap();
-    println!("Connection {:?}", address);
-    let game = game.clone();
-    tokio::spawn(async move {
-      process(socket, game).await.unwrap();
-    });
-  } // im looking it up
-}
-
-// Ok uh figure out something about state-keeping
-// during handshake
-#[derive(Debug)]
-pub struct ConnectingUser {
-  pub username: String,
-  pub protocol_version: u8,
-  pub verification_key: String,
-}
-
-use std::fmt::{self, Debug, Display, Formatter};
-
-pub struct OurError(String);
-
-impl OurError {
-  pub fn new(s: impl Into<String>) -> Self {
-    Self(s.into())
-  }
-}
-impl Debug for OurError {
-  fn fmt(&self, f: &mut Formatter<'_>) -> result::Result<(), fmt::Error> {
-    Debug::fmt(&self.0, f)
-  }
-}
-
-impl Display for OurError {
-  fn fmt(&self, f: &mut Formatter<'_>) -> result::Result<(), fmt::Error> {
-    Display::fmt(&self.0, f)
-  }
-}
-
-impl Error for OurError {}
-
-// do this in another module, like classic/chunks
-async fn world_data() {
-  // quick and dirty
-}
-async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
-  let mut test = Box::pin(&mut socket);
-  let packet = ClassicPacketReader::read_packet_reader(&mut test).await?;
-  let mut user = ConnectingUser {
-    username: String::default(),
-    protocol_version: 0,
-    verification_key: String::default(),
-  };
-  match packet {
-    classic::ClassicPacketClient::PlayerIdentification {
-      protocol_ver,
-      username,
-      verification_key,
-    } => {
-      user.username = username;
-      let players = game.players.lock().await;
-      let mut already_logged = false;
-      for i in 0..players.len() {
-        let lp = &players[i].name;
-        if lp == &user.username {
-          let packet = classic::ClassicPacketServer::DisconnectPlayer {
-            reason: "Already logged in!".to_string(),
+  use tokio::runtime::Runtime;
+  plugins::coreutils::CoreUtils::initialize(&mut pregmts);
+  plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
+  //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
+  let gmts = GMTS::setup(pregmts).await;
+  let cgmts = gmts.clone();
+  let console = tokio::spawn(async move {
+    loop {
+      let mut command = String::new();
+      let x = std::io::stdin().read_line(&mut command);
+      if x.is_err() {
+        log::error!("Error reading command!");
+        continue;
+      }
+      let command = command.trim();
+      let command: Vec<&str> = command.split(" ").collect();
+      match command[0] {
+        "save-all" => {
+          if let None = cgmts.save_world().await {
+            log::error!("Error saving the world.");
+          }
+        }
+        "say" => {
+          let to_say = &command[1..].join(" ");
+          let to_say = format!("&d[Server] {}", to_say);
+          if let None = cgmts.chat_broadcast(&to_say, -69).await {
+            log::error!("Error broadcasting chat message.");
+          }
+        }
+        "stop" => {
+          log::info!("Stopping server..");
+          let message = PlayerCommand::Disconnect {
+            reason: "Server closed".to_string(),
           };
-          socket
-            .write_all(&classic::ClassicPacketServer::serialize(packet)?)
-            .await?;
-          already_logged = true;
+          if let None = cgmts.pass_message_to_all(message).await {
+            log::error!("Message broadcast error.");
+          }
+          if let None = cgmts.save_world().await {
+            log::error!("Error saving the world.");
+          }
+          std::process::exit(0);
         }
-        drop(lp);
+        _ => {
+          log::warn!("Unknown command \"{}\".", command[0]);
+        }
       }
-      drop(players);
-      if already_logged == true {
-        return Err(Box::new(OurError::new("Already logged in!")));
+    }
+  });
+  // Pass around immutable references, and clone the sender.
+
+  //example(&gmts);
+
+  let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
+  log::info!("Server listening on {}", CONFIGURATION.listen_address);
+  let gmts2 = gmts.clone();
+  tokio::spawn(async move {
+    loop {
+      let possible = listener.accept().await;
+      if possible.is_err() {
+        continue;
       }
-      user.protocol_version = protocol_ver;
-      user.verification_key = verification_key;
-      println!(
-        "{} connecting from [{}]",
-        user.username,
-        socket.peer_addr()?.to_string()
-      );
-    }
-    _ => {
-      return Err(Box::new(OurError::new("Wrong packet!")));
-    }
-  }
-  let ops = game.ops.lock().await;
-  let mut isop = false;
-  for op in &*ops {
-    if op == &user.username {
-      isop = true;
-      break;
-    }
-  }
-  drop(ops);
-  let server_identification = classic::ClassicPacketServer::server_identification(
-    0x07,
-    "Ballland".to_string(),
-    "a really good motd".to_string(),
-    isop,
-  )?;
-  socket.write_all(&server_identification).await?;
-  let world = game.world.lock().await;
-  let packets = classic::ClassicPacketServer::serialize_vec(world.to_packets())?;
-  drop(world);
-  for i in 0..packets.len() {
-    socket.write_all(&packets[i]).await?;
-  }
-
-  // Custom position relative to center of map!
-  let player = Player {
-    name: user.username.clone(),
-    data: Arc::new(Mutex::new(PlayerData {
-      position: PositionYP::from_pos(128 / 2, 64, 128 / 2),
-      operator: isop,
-      block_changes: Vec::new(),
-      chatbox: Vec::new(),
-      incoming_packets: Vec::new(),
-    })),
-  };
-
-  //let player = Arc::new(Mutex::new(player));
-  let player_main = player.clone();
-  let game_main = game.clone();
-  let x = player.clone();
-  let mut players = game.players.lock().await;
-  players.push(x);
-  drop(players);
-  let ourplayerdata = player.data.lock().await;
-  let spawn_player = classic::ClassicPacketServer::SpawnPlayer {
-    player_id: -1,
-    name: player.name.clone(),
-    position: ourplayerdata.position.clone(),
-  };
-  let teleport_player = classic::ClassicPacketServer::PlayerTeleport {
-    player_id: -1,
-    position: ourplayerdata.position.clone(),
-  };
-  socket
-    .write_all(&classic::ClassicPacketServer::serialize(spawn_player)?)
-    .await?;
-  socket
-    .write_all(&classic::ClassicPacketServer::serialize(teleport_player)?)
-    .await?;
-  drop(ourplayerdata);
-  /* just replace it with an actual event loop */
-  let (mut readhalf, mut writehalf) = socket.into_split();
-  let game2 = game.clone();
-  let player2 = player.clone();
-  let disconnect_1 = Arc::new(Mutex::new(false));
-  let disconnect_2 = disconnect_1.clone();
-  let writehandle = tokio::spawn(async move {
-    let ourname = player2.name.clone();
-    let message = format!("&e{} joined the game.", ourname);
-    let x = game2.players.lock().await;
-    let players = x.clone();
-    drop(x);
-    for i in 0..players.len() {
-      let mut lockedplayer = players[i].data.lock().await;
-      lockedplayer.chatbox.push(Message {
-        message: message.clone(),
-        system: true,
+      let (stream, _) = possible.unwrap();
+      let gmts = gmts2.clone();
+      tokio::spawn(async move {
+        if let None = new_incoming_connection_handler(stream, &gmts).await {
+          log::error!("Player join error!");
+        }
       });
-      drop(lockedplayer);
     }
-    let mut players_to_render: Vec<Player> = vec![];
-    let mut currently_rendering: Vec<LocalPlayer> = vec![];
-    let mut free_ids = vec![0; 127];
-    for i in 0..127 {
-      free_ids[i] = i as i8;
+  });
+  loop {}
+}
+async fn mc_con_handler(
+  mut stream: TcpStream,
+  gmts: &GMTS,
+) -> Result<(), Box<dyn std::error::Error>> {
+  
+  return Ok(());
+}
+async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> Option<()> {
+  let mut test = Box::pin(&mut stream);
+  let spawn_position = gmts.get_spawnpos().await?;
+  let packet = ClassicPacketReader::read_packet_reader(&mut test).await.ok()?;
+  let (msg_send, recv) = stdmpsc::channel::<PlayerCommand>();
+  drop(test);
+  if let classic::Packet::PlayerIdentification { p_ver, user_name, v_key, cpe_id } = packet {
+    let player_count = gmts.player_count().await?;
+    if player_count + 1 > CONFIGURATION.max_players {
+      let packet = classic::Packet::Disconnect {
+        reason: "Server is full!".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await.ok()?;
+        log::info!("Kicked {} because the server is full.", user_name);
+      return None;
     }
-    loop {
-      let disconnect = disconnect_1.lock().await;
-      if *disconnect {
-        drop(disconnect);
-        return;
+    if user_name.len() >= 20 {
+      let packet = classic::Packet::Disconnect {
+        reason: "Name too long!".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await.ok()?;
+        log::info!("s");
+      return None;
+    }
+    let our_id = gmts.get_unused_id().await?; 
+    let data = PlayerData {
+      position: spawn_position.clone(),
+    };
+    if let Some(_) = gmts.kick_user_by_name(&user_name, "You logged in from another location").await {
+      log::info!("{} was already logged in! Kicked other instance.", user_name);
+    }
+    let mut permission_level: usize;
+    let mut op: bool;
+        let cpe = match cpe_id {
+      0x42 => true,
+      _ => false,
+    };
+    permission_level = 1;
+    op = false;
+    let op_list = settings::get_ops();
+    for op_name in op_list {
+      if user_name == op_name {
+        permission_level = 4;
+        op = true;
       }
-      drop(disconnect);
-      let player = player2.data.try_lock();
-      if player.is_err() {
-        continue;
+    }
+    let mut supported_extensions: Option<HashMap<String, CPEExtensionData>> = None;
+    if cpe {
+      let extensions = gmts.get_extensions().await;
+      let ext_info = classic::Packet::ExtInfo { appname: format!("BetterThanMinecraft v{}", VERSION), extension_count: extensions.len() as i16};
+      stream
+      .write_all(&ClassicPacketWriter::serialize(ext_info).ok()?)
+      .await.ok()?;
+      for (extension, data) in extensions {
+        let ext_entry = classic::Packet::ExtEntry { extname: extension.to_string(), version: data.version as i32};
+        stream
+        .write_all(&ClassicPacketWriter::serialize(ext_entry).ok()?)
+        .await.ok()?;
       }
-      let mut player = player.unwrap();
-      // Block change loop
-      for _ in 0..player.block_changes.len() {
-        let change = player.block_changes.pop().unwrap();
-        let packet = classic::ClassicPacketServer::SetBlock {
-          block: change.clone(),
-        };
-        let write = writehalf
-          .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-          .await;
-        if write.is_err() {
-          let mut disconnect = disconnect_1.lock().await;
-          *disconnect = true;
-          drop(disconnect);
-          break;
-        }
-      }
-      // Incoming packet loop
-      /*       for _ in 0..player.incoming_packets.len() {
-        let packet = player.incoming_packets.pop().unwrap();
-        let write = writehalf
-          .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-          .await;
-        if write.is_err() {
-          let mut disconnect = disconnect_1.lock().await;
-          *disconnect = true;
-          drop(disconnect);
-          break;
-        }
-      } */
-      let ourname = player2.name.clone();
-      drop(player);
-      let players = game2.players.try_lock();
-      if players.is_err() {
-        continue;
-      }
-      let players = players.unwrap();
-
-      // New Player rendering loop
-      for i in 0..players.len() {
-        /*         let lockedplayer = players[i].try_lock();
-        if lockedplayer.is_err() {
-          continue;
-        }
-        let lockedplayer = lockedplayer.unwrap();
-        let lpname = (*lockedplayer).name.clone();
-        drop(lockedplayer); */
-        let lpname = players[i].name.clone();
-        if lpname != ourname {
-          //let us = player2.lock().await;
-          let mut dorender = true;
-          for i in 0..players_to_render.len() {
-            let lockedplayer2 = &players_to_render[i];
-            if lpname == lockedplayer2.name {
-              dorender = false;
-              break;
-            }
-            drop(lockedplayer2);
-          }
-          if dorender == true {
-            players_to_render.push(players[i].clone());
-          }
-        }
-      }
-      drop(players);
-      // Player culling loop
-      let mut rindex = 0;
-      for i in 0..players_to_render.len() {
-        let name = players_to_render[i - rindex].name.clone();
-        let players = game2.players.lock().await;
-        let allplrs = players.clone();
-        drop(players);
-        let mut remove = true;
-        for i in 0..allplrs.len() {
-          if allplrs[i].name == name {
-            remove = false;
-          }
-        }
-        if remove == true {
-          for i in 0..players_to_render.len() {
-            let player = players_to_render[i - rindex].clone();
-            if player.name.clone() == name {
-              players_to_render.remove(i);
-              rindex += 1;
-            }
-            drop(player);
-          }
-          let mut id = 0;
-          let mut rindex2 = 0;
-          for i in 0..currently_rendering.len() {
-            let player = currently_rendering[i - rindex2].player.clone();
-            if player.name.clone() == name {
-              id = currently_rendering[i].id;
-              currently_rendering.remove(i);
-              rindex2 += 1;
-            }
-            drop(player);
-          }
-          let packet = classic::ClassicPacketServer::DespawnPlayer { player_id: id };
-          free_ids.push(id);
-          let write = writehalf
-            .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-            .await;
-          if write.is_err() {
-            let mut disconnect = disconnect_1.lock().await;
-            *disconnect = true;
-            drop(disconnect);
-            break;
-          }
-        }
-      }
-      // Player spawning loop
-      for i in 0..players_to_render.len() {
-        let player = players_to_render[i].data.try_lock();
-        if player.is_err() {
-          continue;
-        }
-        let player = player.unwrap();
-        let name = players_to_render[i].name.clone();
-        let position = (*player).position.clone();
-        drop(player);
-        let mut dorender = true;
-        for i in 0..currently_rendering.len() {
-          if currently_rendering[i].player.name == name {
-            dorender = false;
-            break;
-          }
-        }
-        if dorender == false {
-          continue;
-        }
-        let newid = free_ids.pop().unwrap();
-        let packet = classic::ClassicPacketServer::SpawnPlayer {
-          player_id: newid,
-          name: name,
-          position: position,
-        };
-        let write = writehalf
-          .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-          .await;
-        currently_rendering.push(LocalPlayer {
-          player: players_to_render[i].clone(),
-          id: newid,
-        });
-        if write.is_err() {
-          let mut disconnect = disconnect_1.lock().await;
-          *disconnect = true;
-          drop(disconnect);
-          break;
-        }
-      }
-      // Other player movement loop
-      for i in 0..currently_rendering.len() {
-        let player = currently_rendering[i].player.clone();
-        let player = player.data.try_lock();
-        if player.is_err() {
-          continue;
-        }
-        let player = player.unwrap();
-        let id = currently_rendering[i].id;
-        let position = (*player).position.clone();
-        drop(player);
-        let packet = classic::ClassicPacketServer::PlayerTeleport {
-          player_id: id,
-          position: position,
-        };
-        let write = writehalf
-          .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-          .await;
-        if write.is_err() {
-          let mut disconnect = disconnect_1.lock().await;
-          *disconnect = true;
-          drop(disconnect);
-          break;
-        }
-      }
-
-      // Chat loop
-      let player = player2.data.try_lock();
-      if player.is_err() {
-        continue;
-      }
-      let mut player = player.unwrap();
-      for i in 0..(*player).chatbox.len() {
-        let messageclone = (*player).chatbox.pop().unwrap();
-        let mut id = 0;
-        if messageclone.system == false {
-          let messageclone = messageclone.message.split(" ").collect::<Vec<&str>>();
-          let sender = messageclone[0];
-          let mut chars = sender.chars();
-          chars.next();
-          chars.next_back();
-          let sender = chars.as_str();
-          let ourname = player2.name.clone();
-          if ourname == sender {
-            id = 0;
-          } else {
-            id = 0;
-            /*             for i in 0..currently_rendering.len() {
-              if (*currently_rendering[i].player.lock().await).name == sender {
-                id = currently_rendering[i].id;
-                break;
-              }
-            } */
-          }
+      let mut test = Box::pin(&mut stream);
+      let (appname, extcount) = if let classic::Packet::ExtInfo { appname, extension_count } = ClassicPacketReader::read_packet_reader(&mut test).await.ok()? {
+        (appname, extension_count)
+      } else {
+        return None;
+      };
+      let mut client_supported_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
+      for _ in 0..extcount {
+        let (extname, version) = if let classic::Packet::ExtEntry { extname, version } = ClassicPacketReader::read_packet_reader(&mut test).await.ok()? {
+          (extname, version)
         } else {
-          id = -1;
-        }
-        let packet = classic::ClassicPacketServer::Message {
-          player_id: id,
-          message: messageclone.message,
+          return None;
         };
-        let write = writehalf
-          .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
-          .await;
-        if write.is_err() {
-          let mut disconnect = disconnect_1.lock().await;
-          *disconnect = true;
-          drop(disconnect);
-          break;
+        let data = CPEExtensionData { version: version as usize, required: false };
+        client_supported_extensions.insert(extname, data);
+      }
+      let mut required_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
+      for (extension, data) in extensions {
+        if data.required {
+          required_extensions.insert(extension.to_string(), data.clone());
         }
       }
-      drop(player);
+      for (extension, data) in required_extensions {
+        if client_supported_extensions.get(&extension).is_none() || client_supported_extensions.get(&extension).unwrap().version != data.version {
+          let packet = classic::Packet::Disconnect {
+            reason: "Missing required extensions.".to_string(),
+          };
+          stream
+            .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+            .await.ok()?;
+            log::info!("{} is missing required extensions.", user_name);
+          return None;
+        }
+      }
+      let mut super_supported_extensions = HashMap::new();
+      for (extension, data) in client_supported_extensions {
+        if extensions.get(&extension).is_some() && extensions.get(&extension).unwrap().version == data.version {
+          super_supported_extensions.insert(extension, data);
+        }
+      }
+      supported_extensions = Some(super_supported_extensions);
+    } else if *gmts.cpe_required().await {
+      let packet = classic::Packet::Disconnect {
+        reason: "This server requires the use of CPE.".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await.ok()?;
+        log::info!("{} doesn't support CPE.", user_name);
+      return None;
     }
-  });
-  let readhandle = tokio::spawn(async move {
-    let mut test = Box::pin(&mut readhalf);
+    let whitelist = settings::get_whitelist();
+    let mut in_whitelist = false;
+    for person in whitelist {
+      if user_name == person {
+        in_whitelist = true;
+      }
+    }
+    if !in_whitelist && permission_level < 4 && CONFIGURATION.whitelist_enabled {
+      let packet = classic::Packet::Disconnect {
+        reason: "You are not white-listed on this server!".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await.ok()?;
+        log::info!("{} is not whitelisted.", user_name);
+      return None;
+    }
+    let player = Player {
+      data: data,
+      op,
+      permission_level,
+      id: our_id,
+      name: user_name.clone(),
+      message_send: msg_send.clone(),
+      supported_extensions
+    };
+    gmts.register_user(player).await?;
+    if let None = internal_inc_handler(stream, gmts, recv, &user_name.clone(), our_id as u32, p_ver, op, cpe).await {
+      let hooks = gmts.get_ondisconnect_hooks().await;
+      for hook in &*hooks {
+        hook(gmts.clone(), our_id as i8).await;
+      } 
+      if let None = gmts.remove_user(our_id as i8).await {
+        log::error!("Error removing user.");
+      }
+      if let None = gmts.return_id(our_id as i8).await {
+        log::error!("Error returning id.");
+      }
+      if let None = gmts.chat_broadcast(&format!("&e{} left the game.", user_name), -1).await {
+        log::error!("Error broadcasting chat message.");
+      }
+    }
+  } else {
+    log::info!("G");
+    return None;
+  }
+  Some(())
+}
+async fn internal_inc_handler(mut stream: TcpStream, gmts: &GMTS, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
+  let hooks = gmts.get_earlyonconnect_hooks().await;
+  let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
+  for hook in &*hooks {
+    hook(gmts.clone(), stream.clone(), our_id as i8).await?;
+  }
+  let stream = std::sync::Arc::try_unwrap(stream).ok()?;
+  let mut stream = stream.into_inner();
+  let server_identification = ClassicPacketWriter::server_identification(
+    0x07,
+    CONFIGURATION.server_name.clone(),
+    CONFIGURATION.motd.clone(),
+    op,
+  ).ok()?;
+  stream.write_all(&server_identification).await.unwrap();
+  log::info!(
+    "{}[{}] logging in with entity id {} protocol version {}",
+    our_username,
+    stream.peer_addr().ok()?.to_string(),
+    our_id,
+    our_p_ver
+  );
+  if let None = gmts.chat_broadcast(&format!("&e{} logging in...", our_username), -1).await {
+    log::error!("Error broadcasting chat message.");
+  }
+  let mut world = if let Some(w) = gmts.get_world().await {
+    w
+  } else {
+    return None;
+  };
+  log::info!("Sending world to {}", our_username);
+  world
+    .to_packets(&mut Box::pin(&mut stream))
+    .await
+    .expect("Shouldn't fail!");
+  log::info!("World sent to {}", our_username);
+  let teleport_player = classic::Packet::PlayerTeleportS {
+    player_id: -1,
+    position: PlayerPosition::from_pos(94, 38, 66),
+  };
+  let iswrite = stream
+    .write_all(&ClassicPacketWriter::serialize(teleport_player).ok()?)
+    .await.ok()?;
+    let gmts2 = gmts.clone();
+  if let None = gmts.chat_broadcast(&format!("&e{} joined the game.", our_username), -1).await {
+    log::error!("Error broadcasting chat message.");
+  }
+  let hooks = gmts.get_onconnect_hooks().await;
+  let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
+  for hook in &*hooks {
+    hook(gmts.clone(), stream.clone(), our_id as i8).await?;
+  }
+  let stream = std::sync::Arc::try_unwrap(stream).ok()?;
+  let stream = stream.into_inner();
+  let (mut readhalf, mut writehalf) = stream.into_split();
+  let messagehandle: tokio::task::JoinHandle<std::option::Option<()>> = tokio::spawn(async move {
+    if let None = gmts2.spawn_all_players(our_id as i8).await {
+      return None;
+    }
     loop {
-      let disconnect = disconnect_2.lock().await;
-      if *disconnect {
-        drop(disconnect);
-        return;
-      }
-      drop(disconnect);
-      let packet = classic::ClassicPacketReader::read_packet_reader(&mut test).await;
-      if packet.is_err() {
-        let mut disconnect = disconnect_2.lock().await;
-        *disconnect = true;
-        drop(disconnect);
-        return;
-      }
-      let packet = packet.unwrap();
-
-      loop {
-        match packet {
-          classic::ClassicPacketClient::PositionAndOrientation {
-            player_id,
-            position,
-          } => {
-            let mut ourplayer = player.data.lock().await;
-            ourplayer.position = position;
-            drop(ourplayer);
-          }
-          classic::ClassicPacketClient::Message { message } => {
-            let x_plrs = game.players.lock().await;
-            let players = x_plrs.clone();
-            drop(x_plrs);
-            //println!("Locked fine");
-            if message.starts_with("/") {
-              let mut ourplayer = player.data.lock().await;
-              let message = message.split(" ").collect::<Vec<&str>>();
-              match message[0] {
-                "/coords" => {
-                  let pos = ourplayer.position.clone();
-                  ourplayer.chatbox.push(Message {
-                    message: format!(
-                      "You are at {} {} {} yaw {} pitch {}",
-                      pos.x, pos.y, pos.z, pos.yaw, pos.pitch
-                    )
-                    .to_string(),
-                    system: true,
-                  });
-                }
-                "/isop" => {
-                  let opstatus = (*ourplayer).operator;
-                  ourplayer.chatbox.push(Message {
-                    message: format!("{}", opstatus).to_string(),
-                    system: true,
-                  });
-                }
-                "/tp" => {
-                  let opstatus = (*ourplayer).operator;
-                  if opstatus == false {
-                    ourplayer.chatbox.push(Message {
-                      message: "&cYou do not have permission to run this command.".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  if message.len() < 2 {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /tp (player)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  if message.len() < 3 {
-                    let mut to: PositionYP = PositionYP::default();
-                    let mut set = false;
-                    drop(ourplayer);
-                    for i in 0..players.len() {
-                      let lockedplayer = players[i].data.lock().await;
-                      if players[i].name.to_lowercase() == message[1].to_lowercase() {
-                        to = (*lockedplayer).position.clone();
-                        set = true;
-                        break;
-                      }
-                      drop(lockedplayer);
-                    }
-                    let mut ourplayer = player.data.lock().await;
-                    if set == false {
-                      ourplayer.chatbox.push(Message {
-                        message: "Couldn't tp you!".to_string(),
-                        system: true,
-                      });
-                      break;
-                    }
-                    let teleport_player = classic::ClassicPacketServer::PlayerTeleport {
-                      player_id: -1,
-                      position: to.clone(),
-                    };
-                    ourplayer.incoming_packets.push(teleport_player);
-                  } else {
-                    let mut to: PositionYP = PositionYP::default();
-                    let mut set = false;
-                    drop(ourplayer);
-                    for i in 0..players.len() {
-                      let lockedplayer = players[i].data.lock().await;
-                      if players[i].name.to_lowercase() == message[2].to_lowercase() {
-                        to = (*lockedplayer).position.clone();
-                        set = true;
-                      }
-                      drop(lockedplayer);
-                      if set == true {
-                        break;
-                      }
-                    }
-                    let mut ourplayer = player.data.lock().await;
-                    if set == false {
-                      ourplayer.chatbox.push(Message {
-                        message: "Couldn't tp!".to_string(),
-                        system: true,
-                      });
-                      break;
-                    }
-                    drop(ourplayer);
-                    for i in 0..players.len() {
-                      let mut lockedplayer = players[i].data.lock().await;
-                      if players[i].name.to_lowercase() == message[1].to_lowercase() {
-                        let teleport_player = classic::ClassicPacketServer::PlayerTeleport {
-                          player_id: -1,
-                          position: to.clone(),
-                        };
-                        (*lockedplayer).incoming_packets.push(teleport_player);
-                        drop(lockedplayer);
-                        break;
-                      }
-                      drop(lockedplayer);
-                    }
-                  }
-                }
-                "/setblock" => {
-                  let opstatus = (*ourplayer).operator;
-                  if opstatus == false {
-                    ourplayer.chatbox.push(Message {
-                      message: "&cYou do not have permission to run this command.".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  if message.len() < 4 {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /setblock (x) (y) (z) (blockid)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let x = usize::from_str_radix(message[1], 10);
-                  if x.is_err() {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /setblock (x) (y) (z) (blockid)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let x = x.unwrap() as i16;
-
-                  let y = usize::from_str_radix(message[2], 10);
-                  if y.is_err() {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /setblock (x) (y) (z) (blockid)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let y = y.unwrap() as i16;
-
-                  let z = usize::from_str_radix(message[3], 10);
-                  if z.is_err() {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /setblock (x) (y) (z) (blockid)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let id = usize::from_str_radix(message[4], 10);
-                  if id.is_err() {
-                    ourplayer.chatbox.push(Message {
-                      message: "&Syntax error. Usage: /setblock (x) (y) (z) (blockid)".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let id = id.unwrap() as u8;
-                  let z = z.unwrap() as i16;
-                  let pos = Position { x: x, y: y, z: z };
-                  let mut block = Block {
-                    position: pos,
-                    id: id,
-                  };
-                  /*                   let x_plrs = game.players.try_lock();
-                  if x_plrs.is_err() {
-                    ourplayer.chatbox.push(Message {
-                      message: "Something went wrong.".to_string(),
-                      system: true,
-                    });
-                    break;
-                  }
-                  let x_plrs = x_plrs.unwrap();
-                  let players = x_plrs.clone(); */
-                  //(*ourplayer).block_changes.push(block.clone());
-                  let ourname = player.name.clone();
-                  drop(ourplayer);
-                  for i in 0..players.len() {
-                    let mut lockedplayer = players[i].data.lock().await;
-                    if players[i].name != ourname {
-                      (*lockedplayer).block_changes.push(block.clone());
-                    }
-                    drop(lockedplayer);
-                  }
-                }
-                "/kick" => {
-                  ourplayer.chatbox.push(Message {
-                    message: "&cdunnit work".to_string(),
-                    system: true,
-                  });
-                  break;
-                }
-                _ => {
-                  ourplayer.chatbox.push(Message {
-                    message: "&cUnknown command.".to_string(),
-                    system: true,
-                  });
-                }
-              }
-            } else {
-              let ourname = player.name.clone();
-              let prefix = format!("<{}> ", ourname);
-              let index = std::cmp::min(message.len(), 64 - prefix.len());
-              let tosend = format!("{}{}", prefix, &message[0..index]);
-              println!("{}", tosend);
-              if message.len() > index {
-                let tosend = format!("> {}", &message[index..]);
-                println!("{}", tosend);
-                for i in 0..players.len() {
-                  let mut lockedplayer = players[i].data.lock().await;
-                  lockedplayer.chatbox.push(Message {
-                    message: tosend.clone(),
-                    system: false,
-                  });
-                  drop(lockedplayer);
-                }
-              }
-              for i in 0..players.len() {
-                let mut lockedplayer = players[i].data.lock().await;
-                lockedplayer.chatbox.push(Message {
-                  message: tosend.clone(),
-                  system: false,
-                });
-                drop(lockedplayer);
-              }
-              break;
-              /*               let message = format!("<{}> {}", ourname, message);
-              println!("{}", message);
-              if message.len() >= 64 {
-                ourplayer.chatbox.push(Message {
-                  message: "Message too long!".to_string(),
-                  system: true,
-                });
-                drop(ourplayer);
-                break;
-              }
-              drop(ourplayer);
-              for i in 0..players.len() {
-                let mut lockedplayer = players[i].lock().await;
-                lockedplayer.chatbox.push(Message {
-                  message: message.clone(),
-                  system: false,
-                });
-                drop(lockedplayer);
-              } */
-            }
-          }
-          classic::ClassicPacketClient::SetBlock {
-            coords,
-            mode,
-            block_type,
-          } => {
-            let mut world = game.world.lock().await;
-            let mut block: Block;
-            match mode {
-              0x01 => {
-                block = Block {
-                  id: block_type,
-                  position: coords,
-                };
-              }
-              _ => {
-                block = Block {
-                  id: 0,
-                  position: coords,
-                };
+      let recv = reciever.try_recv();
+      match recv {
+        Ok(msg) => {
+          match msg {
+            PlayerCommand::SetBlock { block } => {
+              let packet = classic::Packet::SetBlockS { block };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                      return None;
               }
             }
-            let x = game.players.lock().await;
-            let players = x.clone();
-            drop(x);
-            let ourname = player.name.clone();
-            for i in 0..players.len() {
-              let mut lockedplayer = players[i].data.lock().await;
-              if players[i].name != ourname {
-                (*lockedplayer).block_changes.push(block.clone());
+            PlayerCommand::SpawnPlayer { position, id, name } => {
+              let packet = classic::Packet::SpawnPlayer {
+                player_id: id,
+                name,
+                position,
+              };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
               }
-              drop(lockedplayer);
             }
-            // Either god or galaxtone knows why this works, but without this, the world is edited wrong and re-logging makes blocks appear in the wrong location.
-            block.position.x += 4;
-            world.set_block(block);
+            PlayerCommand::DespawnPlayer { id } => {
+              let packet = classic::Packet::DespawnPlayer { player_id: id };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::PlayerTeleport { position, id } => {
+              let packet = classic::Packet::PlayerTeleportS {
+                player_id: id,
+                position: position,
+              };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::Message { id, message } => {
+              let packet = classic::Packet::Message {
+                player_id: id,
+                message,
+              };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::Disconnect { reason } => {
+              let packet = classic::Packet::Disconnect { reason };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
           }
-          _ => {}
         }
-        break;
+        Err(_) => {
+          continue;
+        }
       }
     }
   });
-  readhandle.await.unwrap();
-  writehandle.await.unwrap();
-  let mut allplayers = game_main.players.lock().await;
-  let ourname = player_main.name.clone();
-  for i in 0..allplayers.len() {
-    let lockedplayer = allplayers[i].clone();
-    let lockedplayer = lockedplayer.name;
-    if lockedplayer == ourname {
-      allplayers.remove(i);
-      println!("Removed {} from the player pool.", ourname);
-      break;
+  let gmts = gmts.clone();
+  let our_username = our_username.to_string(); 
+  let packethandle: tokio::task::JoinHandle<std::option::Option<()>> = tokio::spawn(async move {
+  //let mut test = Box::pin(&mut readhalf);
+  let mut stored_msg = String::new();
+  use tokio::io::AsyncReadExt;
+  loop {
+    let mut s_p_id = [0; 1];
+    let x = readhalf.peek(&mut s_p_id).await.ok();
+    if x.is_none() {
+      return None;
+    }
+    let hooks = gmts.get_packetrecv_hooks().await;
+    if let Some(hook) = hooks.get(&s_p_id[0]) {
+      let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
+      hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
+      readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
+      continue;
+    };
+    //println!("Started");
+    let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
+    if packet.is_err() {
+      return None;
+    }
+    let packet = packet.unwrap();
+    match packet {
+      classic::Packet::PlayerClicked {
+        button,
+        action,
+        yaw,
+        pitch,
+        target_entity_id,
+        target_block_x,
+        target_block_y,
+        target_block_z,
+        target_block_face,
+      } => {
+
+      }
+      classic::Packet::SetBlockC {
+        coords,
+        mode,
+        block_type,
+      } => {
+        match mode {
+          0x00 => {
+            let block = Block {
+              position: coords,
+              id: 0x00,
+            };
+            if let None = gmts.set_block(&block, our_id as i8).await {
+                if let Some(x) = gmts.get_block(block.position).await {
+                    gmts.block_to_id(x, our_id as i8).await;
+                } else {
+                  log::error!("Block error!");
+                }
+            }
+          }
+          _ => {
+            let block = Block {
+              position: coords,
+              id: block_type,
+            };
+            if let None = gmts.set_block(&block, our_id as i8).await {
+              if let Some(x) = gmts.get_block(block.position).await {
+                  gmts.block_to_id(x, our_id as i8).await;
+              } else {
+                log::error!("Block error!");
+              }
+            }
+          }
+        }
+      }
+      classic::Packet::PositionAndOrientationC { position, .. } => {
+        gmts.send_position_update(our_id as i8, position).await;
+      }
+      classic::Packet::MessageC { message, unused } => {
+          stored_msg.push_str(&message);
+          //if unused == 0 {
+            let message = stored_msg.clone();
+             if message.starts_with("/") {
+              stored_msg = "".to_string();
+              gmts.execute_command(our_id as i8, message).await;
+            } else {
+              stored_msg = "".to_string();
+              let mut prefix = format!("<{}> ", our_username);
+              prefix.push_str(&message);
+              let message = prefix;
+              let message = message.as_bytes().to_vec();
+              let message = message.chunks(64).collect::<Vec<&[u8]>>();
+              let mut msg2 = vec![];
+              for m in message {
+                msg2.push(String::from_utf8_lossy(&m).to_string());
+              }
+              let m = msg2.remove(0);
+              gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
+              for m in msg2 {
+              gmts.chat_broadcast(&format!("> {}", m), (our_id as u8) as i8).await;
+            }
+            }
+          //}
+      }
+      _ => {}
     }
   }
-  println!("Disconnecting user {}", ourname);
-  drop(allplayers);
-  let message = format!("&e{} left the game.", ourname.clone());
-  let x = game_main.players.lock().await;
-  let players = x.clone();
-  for i in 0..players.len() {
-    let mut lockedplayer = players[i].data.lock().await;
-    lockedplayer.chatbox.push(Message {
-      message: message.clone(),
-      system: true,
-    });
-    drop(lockedplayer);
-  }
-  drop(x);
-  Ok(())
+});
+  let packethandle = packethandle.await.ok()??;
+  //let (a, b) = tokio::join!(messagehandle, packethandle);
+  //a.ok()?;
+  //b.ok()?;
+  None
 }

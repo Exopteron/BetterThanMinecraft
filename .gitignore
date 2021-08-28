@@ -1,1 +1,9 @@
 /target
+/*.uncompressed
+/*.cw
+/whitelist.toml
+/Config.toml
+/ops.toml
+/src/modernchunks.rs
+/src/mcprotocol.rs.old
+/src/mains.rs
