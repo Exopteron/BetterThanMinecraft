@@ -320,7 +320,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
   }
   Some(())
 }
-async fn internal_inc_handler(mut stream: TcpStream, gmts: &GMTS, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
+async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
   let hooks = gmts.get_earlyonconnect_hooks().await;
   let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
   for hook in &*hooks {

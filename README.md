@@ -1,14 +1,11 @@
-# Pirate Realm
-
-This project is currently in it's infancy.
-
-Written and managed by Galaxtone and Exopteron.
+# BetterThanMinecraft
+Fork of PirateRealm.
 
 ## Goal
 
-The goal of this project is to write an entirely custom server in Rust compatible with classicube and minecraft, infinite wolds and other major features.
+The goal of this project is to write an entirely custom Classicube server in Rust with modularity in mind.
 
-This will be a heavily experimental project.
+This is a heavily experimental project.
 
 ## Stuff
 
