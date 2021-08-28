@@ -17,7 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 // TODO Make CountingReader and Cursor into one AtomicCursor
 use super::classic::{Packet::{LevelInitialize, LevelDataChunk, LevelFinalize}};
-use super::{BlockID, Block, ClassicPacketWriter};
+use super::{game::BlockID, Block, ClassicPacketWriter};
 use std::pin::Pin;
 use flate2::Compression;
 use flate2::GzBuilder;
@@ -32,6 +32,8 @@ pub struct World {
   pub width: usize,
   pub height: usize,
   pub length: usize,
+  pub path: Option<String>,
+  pub spawnpos: Option<super::game::PlayerPosition>,
 }
 
 use std::io::Result as IoResult;
@@ -67,16 +69,22 @@ impl World {
     data[2] = (size >> 8) as u8;
     data[3] = size as u8;
     generator.generate(&mut data[4..], width, height, length);
-    Self { data: BytesMut::from(&data[..]), width, height, length }
+    Self { data: BytesMut::from(&data[..]), width, height, length, path: None, spawnpos: None }
   }
-  pub fn from_file() -> World {
+  pub fn from_file(file_path: &str) -> Option<World> {
     use nbt::decode::read_compound_tag;
-    let mut cursor = std::io::Cursor::new(include_bytes!("../world.cw.uncompressed"));
-    let root_tag = read_compound_tag(&mut cursor).unwrap();
-    let world = root_tag.get_i8_vec("BlockArray").unwrap();
-    let width = root_tag.get_i16("X").unwrap() as usize;
-    let height = root_tag.get_i16("Y").unwrap() as usize;
-    let length = root_tag.get_i16("Z").unwrap() as usize;
+    use flate2::read::GzDecoder;
+    let mut cursor = std::fs::File::open(file_path).ok()?;
+    let mut cursor = GzDecoder::new(cursor);
+    let root_tag = read_compound_tag(&mut cursor).ok()?;
+    let world = root_tag.get_i8_vec("BlockArray").ok()?;
+    let width = root_tag.get_i16("X").ok()? as usize;
+    let height = root_tag.get_i16("Y").ok()? as usize;
+    let length = root_tag.get_i16("Z").ok()? as usize;
+    let spawn = root_tag.get_compound_tag("Spawn").ok()?;
+    let spawn_x = spawn.get_i16("X").ok()?;
+    let spawn_y = spawn.get_i16("Y").ok()?;
+    let spawn_z = spawn.get_i16("Z").ok()?;
     let mut newworld = vec![];
     for i in 0..world.len() {
       newworld.push(world[i] as u8);
@@ -89,7 +97,33 @@ impl World {
     data[3] = size as u8;
     data.append(&mut newworld);
     //let data = data.into_boxed_slice();
-    Self { data: BytesMut::from(&data[..]), width, height, length }
+    Some(Self { data: BytesMut::from(&data[..]), width, height, length, path: Some(file_path.to_string()), spawnpos: Some(super::game::PlayerPosition::from_pos(spawn_x as u16, spawn_y as u16, spawn_z as u16)) })
+  }
+  pub fn save(&self) -> Option<()> {
+    if self.path.is_some() {
+      use nbt::decode::{read_compound_tag};
+      use nbt::encode::write_gzip_compound_tag;
+      use flate2::read::GzDecoder;
+      let cursor = std::fs::File::open(self.path.as_ref().unwrap()).ok()?;
+      let mut cursor = GzDecoder::new(cursor);
+      let mut root_tag = read_compound_tag(&mut cursor).ok()?;
+      let world: &mut Vec<i8> = root_tag.get_mut("BlockArray").ok()?;
+      for i in 0..self.data.len() - 4 {
+        if world.get_mut(i).is_none() {
+          world.push(self.data[i + 4] as i8);
+        } else {
+          world[i] = self.data[i + 4] as i8;
+        }
+      }
+      let mut byte_tag = vec![];
+      write_gzip_compound_tag(&mut byte_tag, &root_tag).ok()?;
+      std::fs::write(self.path.as_ref().unwrap(), byte_tag).ok()?;
+      return Some(());
+    }
+    None
+  }
+  pub fn get_world_spawnpos(&self) -> &Option<super::game::PlayerPosition> {
+    &self.spawnpos
   }
   pub fn pos_to_index(&self, x: usize, y: usize, z: usize) -> Option<usize> {
     Some(((z + y * self.length) * self.width + x))
@@ -98,6 +132,7 @@ impl World {
 
   // TODO position struct type stuff
   pub fn get_block(&self, x: usize, y: usize, z: usize) -> Option<BlockID> {
+    let x = x + 4;
     let x = self.data.get(self.pos_to_index(x, y, z)?);
     match x {
       Some(x) => {
@@ -109,7 +144,8 @@ impl World {
     }
   }
 
-  pub fn set_block(&mut self, block: Block) -> Option<()> {
+  pub fn set_block(&mut self, mut block: Block) -> Option<()> {
+    block.position.x += 4;
     let pos = self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize)?;
     let p2 = pos.clone();
     drop(pos);
@@ -139,7 +175,8 @@ impl World {
         //let mut reader = &mut self.data;
         let mut data = self.data();
         let (mut reader, counter) = CountingReader::new(&mut data);
-        let mut encoder = GzBuilder::new().comment("Rust>Java").read(&mut reader, Compression::fast());
+        let string = vec!['g' as u8; 12];
+        let mut encoder = GzBuilder::new().comment(string).read(&mut reader, Compression::fast());
         let serialized = ClassicPacketWriter::serialize(LevelInitialize).unwrap();
         writer.write_all(&serialized).await?;
         loop {
