@@ -246,6 +246,11 @@ impl CMDGMTS {
         Some(())
     }
     pub async fn chat_to_id(&self, message: &str, id: i8, target_id: i8) -> Option<()> {
+        if let Some(n) = Self::get_username(&self, target_id).await {
+            log::info!("[CHAT to {}]: {}", n, message);
+        } else {
+            log::info!("[CHAT to {}]: {}", target_id, message);
+        }
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -295,6 +300,7 @@ impl CMDGMTS {
         id: i8,
         target_username: String,
     ) -> Option<()> {
+        log::info!("[CHAT to {}]: {}", target_username, message);
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -1176,7 +1182,8 @@ impl GMTS {
                         executor_id,
                     } => {
                         command.remove(0);
-                        log::info!("Got command: {:?}", command);
+                        let sender_name = cmd_gmts.get_username(executor_id).await.expect("Shouldn't fail! Bug happened!");
+                        log::info!(r#"{} executed server command "/{}""#, sender_name, command);
                         let command = command
                             .split(" ")
                             .map(|s| s.to_string())
