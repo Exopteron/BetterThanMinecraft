@@ -75,10 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
 }));
   if CONFIGURATION.public {}
-/*   pregmts.register_command("G".to_string(), |gmts, args, sender| {
-    log::info!("Hello, {}!", sender);
-    1
-  }); */
   use tokio::runtime::Runtime;
   plugins::coreutils::CoreUtils::initialize(&mut pregmts);
   plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
@@ -375,188 +371,219 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
   let stream = std::sync::Arc::try_unwrap(stream).ok()?;
   let stream = stream.into_inner();
   let (mut readhalf, mut writehalf) = stream.into_split();
-  let messagehandle: tokio::task::JoinHandle<std::option::Option<()>> = tokio::spawn(async move {
-    if let None = gmts2.spawn_all_players(our_id as i8).await {
-      return None;
-    }
-    loop {
-      let recv = reciever.try_recv();
-      match recv {
-        Ok(msg) => {
-          match msg {
-            PlayerCommand::SetBlock { block } => {
-              let packet = classic::Packet::SetBlockS { block };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                      return None;
+  let (send_1, mut recv_1) = oneshot::channel::<Option<()>>();
+  let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
+  tokio::spawn(async move {
+    let function = || async move {
+      if let None = gmts2.spawn_all_players(our_id as i8).await {
+        return None;
+      }
+      loop {
+        match recv_1.try_recv() {
+          Ok(_) => {
+            return Some(());
+          }
+          _ => {
+
+          }
+        }
+        let recv = reciever.try_recv();
+        match recv {
+          Ok(msg) => {
+            match msg {
+              PlayerCommand::SetBlock { block } => {
+                let packet = classic::Packet::SetBlockS { block };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                        return None;
+                }
               }
-            }
-            PlayerCommand::SpawnPlayer { position, id, name } => {
-              let packet = classic::Packet::SpawnPlayer {
-                player_id: id,
-                name,
-                position,
-              };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                return None;
+              PlayerCommand::SpawnPlayer { position, id, name } => {
+                let packet = classic::Packet::SpawnPlayer {
+                  player_id: id,
+                  name,
+                  position,
+                };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                  return None;
+                }
               }
-            }
-            PlayerCommand::DespawnPlayer { id } => {
-              let packet = classic::Packet::DespawnPlayer { player_id: id };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                return None;
+              PlayerCommand::DespawnPlayer { id } => {
+                let packet = classic::Packet::DespawnPlayer { player_id: id };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                  return None;
+                }
               }
-            }
-            PlayerCommand::PlayerTeleport { position, id } => {
-              let packet = classic::Packet::PlayerTeleportS {
-                player_id: id,
-                position: position,
-              };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                return None;
+              PlayerCommand::PlayerTeleport { position, id } => {
+                let packet = classic::Packet::PlayerTeleportS {
+                  player_id: id,
+                  position: position,
+                };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                  return None;
+                }
               }
-            }
-            PlayerCommand::Message { id, message } => {
-              let packet = classic::Packet::Message {
-                player_id: id,
-                message,
-              };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                return None;
+              PlayerCommand::Message { id, message } => {
+                let packet = classic::Packet::Message {
+                  player_id: id,
+                  message,
+                };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                  return None;
+                }
               }
-            }
-            PlayerCommand::Disconnect { reason } => {
-              let packet = classic::Packet::Disconnect { reason };
-              let packet = ClassicPacketWriter::serialize(packet).unwrap();
-              let write = writehalf.write_all(&packet).await;
-              if write.is_err() {
-                return None;
+              PlayerCommand::Disconnect { reason } => {
+                let packet = classic::Packet::Disconnect { reason };
+                let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                let write = writehalf.write_all(&packet).await;
+                if write.is_err() {
+                  return None;
+                }
               }
             }
           }
+          Err(_) => {
+            continue;
+          }
         }
-        Err(_) => {
-          continue;
-        }
+      }
+    };
+    match function().await {
+      None => {
+        send_2.send(None).unwrap();
+      }
+      _ => {
+
       }
     }
   });
   let gmts = gmts.clone();
   let our_username = our_username.to_string(); 
-  let packethandle: tokio::task::JoinHandle<std::option::Option<()>> = tokio::spawn(async move {
-  //let mut test = Box::pin(&mut readhalf);
-  let mut stored_msg = String::new();
-  use tokio::io::AsyncReadExt;
-  loop {
-    let mut s_p_id = [0; 1];
-    let x = readhalf.peek(&mut s_p_id).await.ok();
-    if x.is_none() {
-      return None;
-    }
-    let hooks = gmts.get_packetrecv_hooks().await;
-    if let Some(hook) = hooks.get(&s_p_id[0]) {
-      let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
-      hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
-      readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
-      continue;
-    };
-    //println!("Started");
-    let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
-    if packet.is_err() {
-      return None;
-    }
-    let packet = packet.unwrap();
-    match packet {
-      classic::Packet::PlayerClicked {
-        button,
-        action,
-        yaw,
-        pitch,
-        target_entity_id,
-        target_block_x,
-        target_block_y,
-        target_block_z,
-        target_block_face,
-      } => {
-
-      }
-      classic::Packet::SetBlockC {
-        coords,
-        mode,
-        block_type,
-      } => {
-        match mode {
-          0x00 => {
-            let block = Block {
-              position: coords,
-              id: 0x00,
-            };
-            if let None = gmts.set_block(&block, our_id as i8).await {
-                if let Some(x) = gmts.get_block(block.position).await {
-                    gmts.block_to_id(x, our_id as i8).await;
-                } else {
-                  log::error!("Block error!");
-                }
-            }
+    let packet_handler_wrapper = || async move {
+      //let mut stored_msg = String::new();
+      use tokio::io::AsyncReadExt;
+      loop {
+        match recv_2.try_recv() {
+          Ok(_) => {
+            return Some(());
           }
           _ => {
-            let block = Block {
-              position: coords,
-              id: block_type,
-            };
-            if let None = gmts.set_block(&block, our_id as i8).await {
-              if let Some(x) = gmts.get_block(block.position).await {
-                  gmts.block_to_id(x, our_id as i8).await;
-              } else {
-                log::error!("Block error!");
+
+          }
+        }
+        let mut s_p_id = [0; 1];
+        let x = readhalf.peek(&mut s_p_id).await.ok();
+        if x.is_none() {
+          return None;
+        }
+        let hooks = gmts.get_packetrecv_hooks().await;
+        if let Some(hook) = hooks.get(&s_p_id[0]) {
+          let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
+          hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
+          readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
+          continue;
+        };
+        //println!("Started");
+        let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
+        if packet.is_err() {
+          return None;
+        }
+        let packet = packet.unwrap();
+        match packet {
+          classic::Packet::PlayerClicked {
+            button,
+            action,
+            yaw,
+            pitch,
+            target_entity_id,
+            target_block_x,
+            target_block_y,
+            target_block_z,
+            target_block_face,
+          } => {
+    
+          }
+          classic::Packet::SetBlockC {
+            coords,
+            mode,
+            block_type,
+          } => {
+            match mode {
+              0x00 => {
+                let block = Block {
+                  position: coords,
+                  id: 0x00,
+                };
+                if let None = gmts.set_block(&block, our_id as i8).await {
+                    if let Some(x) = gmts.get_block(block.position).await {
+                        gmts.block_to_id(x, our_id as i8).await;
+                    } else {
+                      log::error!("Block error!");
+                    }
+                }
+              }
+              _ => {
+                let block = Block {
+                  position: coords,
+                  id: block_type,
+                };
+                if let None = gmts.set_block(&block, our_id as i8).await {
+                  if let Some(x) = gmts.get_block(block.position).await {
+                      gmts.block_to_id(x, our_id as i8).await;
+                  } else {
+                    log::error!("Block error!");
+                  }
+                }
               }
             }
           }
+          classic::Packet::PositionAndOrientationC { position, .. } => {
+            gmts.send_position_update(our_id as i8, position).await;
+          }
+          classic::Packet::MessageC { message, unused } => {
+              //if unused == 0 {
+                 if message.starts_with("/") {
+                  gmts.execute_command(our_id as i8, message).await;
+                } else {
+                  let mut prefix = format!("<{}> ", our_username);
+                  prefix.push_str(&message);
+                  let message = prefix;
+                  let message = message.as_bytes().to_vec();
+                  let message = message.chunks(64).collect::<Vec<&[u8]>>();
+                  let mut msg2 = vec![];
+                  for m in message {
+                    msg2.push(String::from_utf8_lossy(&m).to_string());
+                  }
+                  let m = msg2.remove(0);
+                  gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
+                  for m in msg2 {
+                  gmts.chat_broadcast(&format!("> {}", m), (our_id as u8) as i8).await;
+                }
+                }
+              //}
+          }
+          _ => {}
         }
       }
-      classic::Packet::PositionAndOrientationC { position, .. } => {
-        gmts.send_position_update(our_id as i8, position).await;
-      }
-      classic::Packet::MessageC { message, unused } => {
-          stored_msg.push_str(&message);
-          //if unused == 0 {
-            let message = stored_msg.clone();
-             if message.starts_with("/") {
-              stored_msg = "".to_string();
-              gmts.execute_command(our_id as i8, message).await;
-            } else {
-              stored_msg = "".to_string();
-              let mut prefix = format!("<{}> ", our_username);
-              prefix.push_str(&message);
-              let message = prefix;
-              let message = message.as_bytes().to_vec();
-              let message = message.chunks(64).collect::<Vec<&[u8]>>();
-              let mut msg2 = vec![];
-              for m in message {
-                msg2.push(String::from_utf8_lossy(&m).to_string());
-              }
-              let m = msg2.remove(0);
-              gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
-              for m in msg2 {
-              gmts.chat_broadcast(&format!("> {}", m), (our_id as u8) as i8).await;
-            }
-            }
-          //}
-      }
-      _ => {}
+    };
+  match packet_handler_wrapper().await {
+    None => {
+      send_1.send(None).ok().unwrap();
+    }
+    _ => {
+
     }
   }
-});
-  let packethandle = packethandle.await.ok()??;
+  //let mut test = Box::pin(&mut readhalf);
   //let (a, b) = tokio::join!(messagehandle, packethandle);
   //a.ok()?;
   //b.ok()?;

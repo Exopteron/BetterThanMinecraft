@@ -8,7 +8,6 @@ impl crate::game::Plugin for LongerMessagesCPE {
         pre_gmts.register_extension("LongerMessages", 1, false);
         pre_gmts.register_ondisconnect_hook(Box::new(|gmts, id| {
             Box::pin(async move {
-                log::info!("yo");
                 return Some(());
                 let supported_extensions = if let Some(x) = gmts.get_supported_extensions(id).await {
                     x
