@@ -89,6 +89,9 @@ pub enum Packet {
     target_block_y: i16,
     target_block_z: i16,
     target_block_face: u8,
+  },
+  UpdateUserType {
+    user_type: u8,
   }
 }
 
@@ -98,6 +101,11 @@ pub struct ClassicPacketWriter {}
 impl ClassicPacketWriter {
   pub fn serialize(packet: Packet) -> std::io::Result<Vec<u8>> {
     match packet {
+      Packet::UpdateUserType { user_type } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_byte(user_type);
+        return builder.build(0x0f);
+      }
       Packet::LevelInitialize => {
         let builder = ClassicPacketBuilder::new();
         return builder.build(0x02);

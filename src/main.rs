@@ -68,7 +68,7 @@ static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| settings::get_options()
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut pregmts = PreGMTS::new();
-  pregmts.register_command("ver".to_string(), Box::new(|gmts: CMDGMTS, args, sender| {
+  pregmts.register_command("ver".to_string(), "", "Get server version", Box::new(|gmts: CMDGMTS, args, sender| {
     Box::pin(async move {
         gmts.chat_to_id(&format!("&aServer is running BetterThanMinecraft v{}.", VERSION), -1, sender).await;
         0
@@ -77,50 +77,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   if CONFIGURATION.public {}
   use tokio::runtime::Runtime;
   plugins::coreutils::CoreUtils::initialize(&mut pregmts);
-  plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
+  //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
-  let cgmts = gmts.clone();
-  let console = tokio::spawn(async move {
+  let data = PlayerData { position: None };
+  let (console_send, mut console_recv) = stdmpsc::channel::<PlayerCommand>();
+  let player = Player {
+    data: data,
+    op: true,
+    permission_level: 5,
+    entity: false,
+    id: -69i8 as u32,
+    name: "Server".to_string(),
+    message_send: console_send.clone(),
+    supported_extensions: None,
+  };
+  gmts.register_user(player).await.unwrap();
+  let (send_1, mut recv_1) = oneshot::channel::<Option<()>>();
+  let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
+  let cgmts_1 = gmts.clone();
+  let cgmts_2 = gmts.clone();
+  tokio::spawn(async move {
     loop {
-      let mut command = String::new();
+       let mut command = String::new();
       let x = std::io::stdin().read_line(&mut command);
       if x.is_err() {
         log::error!("Error reading command!");
         continue;
       }
-      let command = command.trim();
-      let command: Vec<&str> = command.split(" ").collect();
-      match command[0] {
-        "save-all" => {
-          if let None = cgmts.save_world().await {
-            log::error!("Error saving the world.");
+      let command = command.trim().to_string();
+      cgmts_1.execute_command(-69, format!("/{}", command)).await.unwrap();
+    }
+  });
+   tokio::spawn(async move {
+    loop {
+        if let Ok(msg) = console_recv.recv() {
+          match msg {
+            PlayerCommand::Message { id, message } => {
+              log::info!("[MESSAGE TO CONSOLE] {}", message);
+            }
+            _ => {
+
+            }
           }
         }
-        "say" => {
-          let to_say = &command[1..].join(" ");
-          let to_say = format!("&d[Server] {}", to_say);
-          if let None = cgmts.chat_broadcast(&to_say, -69).await {
-            log::error!("Error broadcasting chat message.");
-          }
-        }
-        "stop" => {
-          log::info!("Stopping server..");
-          let message = PlayerCommand::Disconnect {
-            reason: "Server closed".to_string(),
-          };
-          if let None = cgmts.pass_message_to_all(message).await {
-            log::error!("Message broadcast error.");
-          }
-          if let None = cgmts.save_world().await {
-            log::error!("Error saving the world.");
-          }
-          std::process::exit(0);
-        }
-        _ => {
-          log::warn!("Unknown command \"{}\".", command[0]);
-        }
-      }
     }
   });
   // Pass around immutable references, and clone the sender.
@@ -184,7 +184,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
     }
     let our_id = gmts.get_unused_id().await?; 
     let data = PlayerData {
-      position: spawn_position.clone(),
+      position: Some(spawn_position.clone()),
     };
     if let Some(_) = gmts.kick_user_by_name(&user_name, "You logged in from another location").await {
       log::info!("{} was already logged in! Kicked other instance.", user_name);
@@ -289,6 +289,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
       data: data,
       op,
       permission_level,
+      entity: true,
       id: our_id,
       name: user_name.clone(),
       message_send: msg_send.clone(),

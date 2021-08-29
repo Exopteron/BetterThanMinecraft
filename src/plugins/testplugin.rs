@@ -121,7 +121,7 @@ impl crate::game::Plugin for TestPlugin {
         }); */
         pre_gmts.register_value("block_break_enabled", GMTSElement { val: Arc::new(Box::new(true)) }).unwrap();
         static X: usize = 42069;
-        pre_gmts.register_command("msg".to_string(), Box::new(|gmts: CMDGMTS, args, sender| {
+        pre_gmts.register_command("msg".to_string(), "(user) (message)", "Message a user", Box::new(|gmts: CMDGMTS, args, sender| {
             Box::pin(async move {
                 log::info!("X: {}", X);
                 if args.len() < 1 {
@@ -144,7 +144,7 @@ impl crate::game::Plugin for TestPlugin {
                 0
             })
         }));
-         pre_gmts.register_command("blockenabled".to_string(), Box::new(move |gmts: CMDGMTS, args, sender| {
+         pre_gmts.register_command("blockenabled".to_string(), "", "", Box::new(move |gmts: CMDGMTS, args, sender| {
             Box::pin(async move {
                 let perm_level = if let Some(p) = gmts.get_permission_level(sender).await {
                     p

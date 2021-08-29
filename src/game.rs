@@ -126,12 +126,13 @@ pub struct Block {
 }
 
 pub struct PlayerData {
-    pub position: PlayerPosition,
+    pub position: Option<PlayerPosition>,
 }
 pub struct Player {
     pub data: PlayerData,
     pub op: bool,
     pub permission_level: usize,
+    pub entity: bool,
     // unique identifier, shorthand
     pub id: u32,
     pub name: String,
@@ -173,6 +174,7 @@ pub struct GMTS {
     pub commands_send: mpsc::Sender<CommandsCommand>,
     pub extensions: HashMap<String, CPEExtensionData>,
     pub storage_send: mpsc::Sender<StorageCommand>,
+    pub commands_list: HashMap<String, CommandData>,
     pub cpe_required: bool,
     pub onconnect_hooks: Arc<Vec<
         Box<
@@ -229,6 +231,7 @@ pub struct CMDGMTS {
     pub players_send: mpsc::Sender<PlayersCommand>,
     pub tempcrntid_send: mpsc::Sender<TempCrntIdCommand>,
     pub storage_send: mpsc::Sender<StorageCommand>,
+    pub commands_list: HashMap<String, CommandData>,
 }
 impl CMDGMTS {
     pub async fn chat_broadcast(&self, message: &str, id: i8) -> Option<()> {
@@ -240,6 +243,24 @@ impl CMDGMTS {
         };
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
+            .await
+            .ok()?;
+        res_recv.await.ok()?;
+        Some(())
+    }
+    pub async fn chat_to_permlevel(&self, message: &str, id: i8, level: usize) -> Option<()> {
+        log::info!("[CHAT to perm level >= {}]: {}", level, message);
+        let (res_send, res_recv) = oneshot::channel();
+        let message = PlayerCommand::Message {
+            id: (id as u8) as i8,
+            message: message.to_string(),
+        };
+        self.players_send
+            .send(PlayersCommand::PassMessageToPermLevel {
+                message,
+                res_send,
+                level,
+            })
             .await
             .ok()?;
         res_recv.await.ok()?;
@@ -400,6 +421,14 @@ impl CMDGMTS {
             .ok()?;
         res_recv.await.ok()
     }
+    pub async fn pass_message_to_permlevel(&self, message: PlayerCommand, level: usize) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::PassMessageToPermLevel { message, res_send, level })
+            .await
+            .ok()?;
+        res_recv.await.ok()
+    }
     pub async fn pass_message_to_all(&self, message: PlayerCommand) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -446,6 +475,14 @@ impl CMDGMTS {
             .await
             .ok()?;
         res_recv.await.ok()?
+    }
+    pub async fn stop_server(&self) -> Option<()> {
+        let message = PlayerCommand::Disconnect {
+            reason: "Server closed".to_string(),
+          };
+        self.pass_message_to_all(message).await?;
+        self.save_world().await?;
+        std::process::exit(0);
     }
     pub async fn save_world(&self) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
@@ -551,6 +588,9 @@ impl CMDGMTS {
             .ok()?;
         res_recv.await.ok()
     }
+    pub async fn get_commands_list(&self) -> HashMap<String, CommandData> {
+        self.commands_list.clone()
+    }
 }
 use std::any::{Any, TypeId};
 use std::sync::Arc;
@@ -560,14 +600,23 @@ pub struct GMTSElement {
 }
 use std::future::Future;
 use std::pin::Pin;
+#[derive(Clone)]
+pub struct CommandData {
+    pub args: String,
+    pub desc: String,
+}
+pub struct Command {
+    pub data: CommandData,
+    pub closure:         Box<
+        dyn Fn(CMDGMTS, Vec<String>, i8) -> Pin<Box<dyn Future<Output = usize> + Send>>
+            + Send
+            + Sync,
+    >
+}
 pub struct PreGMTS {
     pub commands: HashMap<
         String,
-        Box<
-            dyn Fn(CMDGMTS, Vec<String>, i8) -> Pin<Box<dyn Future<Output = usize> + Send>>
-                + Send
-                + Sync,
-        >,
+        Command,
     >,
     pub pmta_hooks: Vec<
         Box<
@@ -655,13 +704,15 @@ impl PreGMTS {
     pub fn register_command(
         &mut self,
         command: String,
+        args: &str,
+        desc: &str,
         closure: Box<
             dyn Fn(CMDGMTS, Vec<String>, i8) -> Pin<Box<dyn Future<Output = usize> + Send>>
                 + Send
                 + Sync,
         >,
     ) {
-        self.commands.insert(command, closure);
+        self.commands.insert(command, Command { data: CommandData { args: args.to_string(), desc: desc.to_string() }, closure });
     }
     pub fn register_pmta_hook(
         &mut self,
@@ -778,12 +829,18 @@ impl GMTS {
         let (players_send, players_recv) = mpsc::channel::<PlayersCommand>(10000000);
         let (temp_crnt_id_send, tci_recv) = mpsc::channel::<TempCrntIdCommand>(10);
         let (storage_send, store_recv) = mpsc::channel::<StorageCommand>(10);
+        let (commands_send, cmd_recver) = mpsc::channel::<CommandsCommand>(1000000);
         let storage_send_2 = storage_send.clone();
+        let mut all_commands = HashMap::new();
+        for (cmd_name, command) in &pre_gmts.commands {
+            all_commands.insert(cmd_name.clone(), command.data.clone());
+        }
         let cmd_gmts = CMDGMTS {
             world_send: world_send.clone(),
             players_send: players_send.clone(),
             tempcrntid_send: temp_crnt_id_send.clone(),
             storage_send: storage_send.clone(),
+            commands_list: all_commands.clone(),
         };
         let storage = pre_gmts.values;
         let mut recv = store_recv;
@@ -934,14 +991,16 @@ impl GMTS {
                         let id = user.id;
                         let name = user.name.clone();
                         let pos = user.data.position.clone();
-                        for player in &mut players {
-                            let x = player.1.message_send.send(PlayerCommand::SpawnPlayer {
-                                position: pos.clone(),
-                                id: (id as u8) as i8,
-                                name: name.clone(),
-                            });
-                            if x.is_err() {
-                                println!("Shouldn't fail");
+                        if pos.is_some() {
+                            for player in &mut players {
+                                let x = player.1.message_send.send(PlayerCommand::SpawnPlayer {
+                                    position: pos.unwrap().clone(),
+                                    id: (id as u8) as i8,
+                                    name: name.clone(),
+                                });
+                                if x.is_err() {
+                                    println!("Shouldn't fail");
+                                }
                             }
                         }
                         user_ids.insert(id, name);
@@ -969,7 +1028,19 @@ impl GMTS {
                             player.1.message_send.send(message.clone());
                         }
                         res_send.send(());
-                    } // ...
+                    } 
+                    PlayersCommand::PassMessageToPermLevel {
+                        mut message,
+                        level,
+                        res_send,
+                    } => {
+                        for player in &mut players {
+                            if player.1.permission_level >= level {
+                                player.1.message_send.send(message.clone());
+                            }
+                        }
+                        res_send.send(()).expect(ERR_SENDING_RESULT);
+                    }// ...
                     PlayersCommand::SpawnAllPlayers { my_id, res_send } => {
                         let us = players.get(&my_id);
                         if us.is_none() {
@@ -977,18 +1048,20 @@ impl GMTS {
                         } else {
                             let us = us.unwrap();
                             for player in &players {
-                                if player.1.id != us.id {
-                                    us.message_send.send(PlayerCommand::SpawnPlayer {
-                                        position: player.1.data.position.clone(),
-                                        id: (player.1.id as u8) as i8,
-                                        name: player.1.name.clone(),
-                                    });
-                                } else {
-                                    us.message_send.send(PlayerCommand::SpawnPlayer {
-                                        position: player.1.data.position.clone(),
-                                        id: -1,
-                                        name: player.1.name.clone(),
-                                    });
+                                if player.1.data.position.is_some() {
+                                    if player.1.id != us.id {
+                                        us.message_send.send(PlayerCommand::SpawnPlayer {
+                                            position: player.1.data.position.unwrap().clone(),
+                                            id: (player.1.id as u8) as i8,
+                                            name: player.1.name.clone(),
+                                        });
+                                    } else {
+                                        us.message_send.send(PlayerCommand::SpawnPlayer {
+                                            position: player.1.data.position.unwrap().clone(),
+                                            id: -1,
+                                            name: player.1.name.clone(),
+                                        });
+                                    }
                                 }
                             }
                             res_send.send(());
@@ -1004,7 +1077,7 @@ impl GMTS {
                         }
                     }
                     PlayersCommand::OnlinePlayerCount { res_send } => {
-                        res_send.send(players.len());
+                        res_send.send(players.len() - 1).expect(ERR_SENDING_RESULT);
                     }
                     PlayersCommand::SetPermissionLevel { id, level, res_send } => {
                         if let Some(us) = players.get_mut(&id) {
@@ -1071,7 +1144,7 @@ impl GMTS {
                     PlayersCommand::GetPosition { id, res_send } => {
                         if let Some(user) = players.get(&id) {
                             res_send
-                                .send(Some(user.data.position.clone()))
+                                .send(user.data.position.clone())
                                 .expect(ERR_SENDING_RESULT);
                         } else {
                             res_send.send(None).expect(ERR_SENDING_RESULT);
@@ -1172,7 +1245,7 @@ impl GMTS {
                 }
             }
         });
-        let (commands_send, mut recv) = mpsc::channel::<CommandsCommand>(10);
+        let mut recv = cmd_recver;
         let commands = pre_gmts.commands;
         tokio::spawn(async move {
             loop {
@@ -1180,6 +1253,7 @@ impl GMTS {
                     CommandsCommand::SendCommand {
                         mut command,
                         executor_id,
+                        res_send,
                     } => {
                         command.remove(0);
                         let sender_name = cmd_gmts.get_username(executor_id).await.expect("Shouldn't fail! Bug happened!");
@@ -1189,7 +1263,7 @@ impl GMTS {
                             .map(|s| s.to_string())
                             .collect::<Vec<String>>();
                         if let Some(c) = commands.get(&command[0]) {
-                            let x = c(cmd_gmts.clone(), command[1..].to_vec(), executor_id).await;
+                            let x = (c.closure)(cmd_gmts.clone(), command[1..].to_vec(), executor_id).await;
                             match x {
                                 0 => (),
                                 1 => {
@@ -1214,17 +1288,18 @@ impl GMTS {
                         } else {
                             cmd_gmts.chat_to_id(UNKNOWN_COMMAND, -1, executor_id).await;
                         }
+                        res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                     }
                 }
             }
         });
-
         GMTS {
             world_send,
             players_send,
             tempcrntid_send: temp_crnt_id_send,
             commands_send,
             storage_send: storage_send_2,
+            commands_list: all_commands,
             extensions: pre_gmts.extensions,
             cpe_required: pre_gmts.cpe_required,
             onconnect_hooks: Arc::new(pre_gmts.onconnect_hooks),
@@ -1402,6 +1477,24 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn chat_to_permlevel(&self, message: &str, id: i8, level: usize) -> Option<()> {
+        log::info!("[CHAT to perm level >= {}]: {}", level, message);
+        let (res_send, res_recv) = oneshot::channel();
+        let message = PlayerCommand::Message {
+            id: (id as u8) as i8,
+            message: message.to_string(),
+        };
+        self.players_send
+            .send(PlayersCommand::PassMessageToPermLevel {
+                message,
+                res_send,
+                level,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?;
+        Some(())
+    }
     pub async fn chat_to_id(&self, message: &str, id: i8, target_id: i8) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
@@ -1471,6 +1564,14 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()
     }
+    pub async fn pass_message_to_permlevel(&self, message: PlayerCommand, level: usize) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::PassMessageToPermLevel { message, res_send, level })
+            .await
+            .ok()?;
+        res_recv.await.ok()
+    }
     pub async fn pass_message_to_all(&self, message: PlayerCommand) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -1529,6 +1630,15 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn stop_server(&self) -> Option<()> {
+        let message = PlayerCommand::Disconnect {
+            reason: "Server closed".to_string(),
+          };
+        self.pass_message_to_all(message).await?;
+        log::info!("Saving world");
+        self.save_world().await?;
+        std::process::exit(0);
+    }
     pub async fn save_world(&self) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
@@ -1578,14 +1688,19 @@ impl GMTS {
         res_recv.await.ok()
     }
     pub async fn execute_command(&self, id: i8, command: String) -> Option<()> {
+    let (res_send, res_recv) = oneshot::channel();
         self.commands_send
             .send(CommandsCommand::SendCommand {
                 executor_id: id,
                 command,
+                res_send,
             })
             .await
             .ok()?;
-        Some(())
+        res_recv.await.ok()?
+    }
+    pub async fn get_commands_list(&self) -> HashMap<String, CommandData> {
+        self.commands_list.clone()
     }
 }
 /*
@@ -1664,7 +1779,7 @@ pub enum WorldCommand {
     },
 }
 pub enum CommandsCommand {
-    SendCommand { command: String, executor_id: i8 },
+    SendCommand { command: String, executor_id: i8, res_send: oneshot::Sender<Option<()>> },
 }
 pub enum StorageCommand {
     GetValue {
@@ -1701,6 +1816,11 @@ pub enum PlayersCommand {
     },
     PassMessageToAll {
         message: PlayerCommand,
+        res_send: oneshot::Sender<()>,
+    },
+    PassMessageToPermLevel {
+        message: PlayerCommand,
+        level: usize,
         res_send: oneshot::Sender<()>,
     },
     SpawnAllPlayers {
