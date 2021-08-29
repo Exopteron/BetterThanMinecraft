@@ -1,11 +1,11 @@
  
 [package]
 name = "BetterThanMinecraft"
-version = "0.1.0"
+version = "0.1.2-alpha"
 authors = ["Galaxtone", "Exopteron"]
 edition = "2018"
 description = "An experimental classicube server."
-repository = "https://github.com/Galaxtone/PirateRealm"
+repository = "https://github.com/Exopteron/BetterThanMinecraft"
 license = "GPL-3.0-or-later"
 
 [dependencies]

@@ -12,6 +12,15 @@ use env_logger::Builder;
 use log::LevelFilter;
 use std::io::Write;
 #[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct Ban {
+    pub username: String,
+    pub reason: String,
+}
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+struct SerializeBans {
+    banlist: Vec<Ban>,
+}
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
 struct SerializeOPS {
     ops: Vec<String>,
 }
@@ -20,14 +29,15 @@ struct SerializeWhitelist {
     whitelisted: Vec<String>,
 }
 const DEFAULT_CONFIG: &str = r#"# Default config
+spawn_protection_radius = 32
 whitelist_enabled = false
 world_file = "world.cw"
 listen_address = "0.0.0.0:25565"
 admin_slot = false
 public = true
-server_name = "Test"
+server_name = "BetterThanMinecraft"
 max_players = 20
-motd = "Hi!"
+motd = "A BetterThanMinecraft server"
 "#;
 pub fn get_options() -> ServerOptions {
     Builder::new()
@@ -42,11 +52,11 @@ pub fn get_options() -> ServerOptions {
     })
     .filter(None, LevelFilter::Info)
     .init();
-    let file = if let Ok(f) = std::fs::read_to_string("Config.toml") {
+    let file = if let Ok(f) = std::fs::read_to_string("config.toml") {
         f
     } else {
         log::info!("Generating configuration file.");
-        std::fs::write("Config.toml", DEFAULT_CONFIG).unwrap();
+        std::fs::write("config.toml", DEFAULT_CONFIG).unwrap();
         DEFAULT_CONFIG.to_string()
     };
     let config: ServerOptions = if let Ok(c) = toml::from_str(&file) {
@@ -142,8 +152,16 @@ pub fn add_whitelist(username: &str) {
         log::error!("Invalid whitelist file!");
         std::process::exit(1);
     };
-    config.whitelisted.push(username.to_string());
-    std::fs::write("whitelist.toml", toml::to_string(&config).unwrap()).unwrap();
+    let mut doit = true;
+    for name in &config.whitelisted {
+        if name == username {
+            doit = false;
+        }
+    }
+    if doit {
+        config.whitelisted.push(username.to_string());
+        std::fs::write("whitelist.toml", toml::to_string(&config).unwrap()).unwrap();
+    }
 }
 pub fn remove_whitelist(username: &str) {
     let file = if let Ok(f) = std::fs::read_to_string("whitelist.toml") {
@@ -163,4 +181,59 @@ pub fn remove_whitelist(username: &str) {
         name != username
     });
     std::fs::write("whitelist.toml", toml::to_string(&config).unwrap()).unwrap();
+}
+
+
+
+pub fn get_banlist() -> Vec<Ban> {
+    let file = if let Ok(f) = std::fs::read_to_string("banlist.toml") {
+        f
+    } else {
+        log::info!("Generating banlist file.");
+        std::fs::write("banlist.toml", r#"banlist = []"#).unwrap();
+        r#"banlist = []"#.to_string()
+    };
+    let config: SerializeBans = if let Ok(c) = toml::from_str(&file) {
+        c
+    } else {
+        log::error!("Invalid banlist file!");
+        std::process::exit(1);
+    };
+    config.banlist
+}
+pub fn add_banlist(username: &str, reason: &str) {
+    let file = if let Ok(f) = std::fs::read_to_string("banlist.toml") {
+        f
+    } else {
+        log::info!("Generating banlist file.");
+        std::fs::write("banlist.toml", r#"banlist = []"#).unwrap();
+        r#"banlist = []"#.to_string()
+    };
+    let mut config: SerializeBans = if let Ok(c) = toml::from_str(&file) {
+        c
+    } else {
+        log::error!("Invalid banlist file!");
+        std::process::exit(1);
+    };
+    config.banlist.push(Ban { username: username.to_string(), reason: reason.to_string()});
+    std::fs::write("banlist.toml", toml::to_string(&config).unwrap()).unwrap();
+}
+pub fn remove_banlist(username: &str) {
+    let file = if let Ok(f) = std::fs::read_to_string("banlist.toml") {
+        f
+    } else {
+        log::info!("Generating banlist file.");
+        std::fs::write("banlist.toml", r#"banlist = []"#).unwrap();
+        r#"banlist = []"#.to_string()
+    };
+    let mut config: SerializeBans = if let Ok(c) = toml::from_str(&file) {
+        c
+    } else {
+        log::error!("Invalid banlist file!");
+        std::process::exit(1);
+    };
+    config.banlist.retain(|ban| {
+        ban.username != username
+    });
+    std::fs::write("banlist.toml", toml::to_string(&config).unwrap()).unwrap();
 }

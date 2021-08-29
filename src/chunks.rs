@@ -74,7 +74,7 @@ impl World {
   pub fn from_file(file_path: &str) -> Option<World> {
     use nbt::decode::read_compound_tag;
     use flate2::read::GzDecoder;
-    let mut cursor = std::fs::File::open(file_path).ok()?;
+    let cursor = std::fs::File::open(file_path).ok()?;
     let mut cursor = GzDecoder::new(cursor);
     let root_tag = read_compound_tag(&mut cursor).ok()?;
     let world = root_tag.get_i8_vec("BlockArray").ok()?;
@@ -107,6 +107,20 @@ impl World {
       let cursor = std::fs::File::open(self.path.as_ref().unwrap()).ok()?;
       let mut cursor = GzDecoder::new(cursor);
       let mut root_tag = read_compound_tag(&mut cursor).ok()?;
+      let spawn: &mut nbt::CompoundTag = root_tag.get_mut("Spawn").ok()?;
+      if self.spawnpos.is_some() {
+        let sppos = self.spawnpos.unwrap();
+        let spawn_x: &mut i16 = spawn.get_mut("X").ok()?;
+        *spawn_x = (sppos.x / 32) as i16;
+        drop(spawn_x);
+        let spawn_y: &mut i16 = spawn.get_mut("Y").ok()?;
+        *spawn_y = (sppos.y / 32) as i16;
+        drop(spawn_y);
+        let spawn_z: &mut i16 = spawn.get_mut("Z").ok()?;
+        *spawn_z = (sppos.z / 32) as i16;
+        drop(spawn_z);
+      }
+      drop(spawn);
       let world: &mut Vec<i8> = root_tag.get_mut("BlockArray").ok()?;
       for i in 0..self.data.len() - 4 {
         if world.get_mut(i).is_none() {
@@ -129,7 +143,7 @@ impl World {
     self.spawnpos = Some(pos);
   }
   pub fn pos_to_index(&self, x: usize, y: usize, z: usize) -> Option<usize> {
-    Some(((z + y * self.length) * self.width + x))
+    Some((z + y * self.length) * self.width + x)
     //(z.checked_add(y.checked_mul(self.length)?)?).checked_mul(self.width.checked_add(x)?)
   }
 

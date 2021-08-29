@@ -234,6 +234,19 @@ pub struct CMDGMTS {
     pub commands_list: HashMap<String, CommandData>,
 }
 impl CMDGMTS {
+    pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
+        self.message_to_id(PlayerCommand::PlayerTeleport { position, id: -1 }, id).await?;
+        Some(())
+    }
+    pub async fn msg_broadcast(&self, message: PlayerCommand) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::PassMessageToAll { message, res_send })
+            .await
+            .ok()?;
+        res_recv.await.ok()?;
+        Some(())
+    }
     pub async fn chat_broadcast(&self, message: &str, id: i8) -> Option<()> {
         log::info!("[CHAT]: {}", message);
         let (res_send, res_recv) = oneshot::channel();
@@ -660,6 +673,13 @@ pub struct PreGMTS {
                 + Sync,
         >,
     >,
+    pub oninit_hooks: Vec<
+        Box<
+            dyn Fn(CMDGMTS) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
     pub getblock_hooks:
         Vec<fn(CMDGMTS, BlockPosition) -> Pin<Box<dyn Future<Output = BlockPosition> + Send>>>,
     pub setblock_hooks: Vec<
@@ -727,6 +747,7 @@ impl PreGMTS {
             pmta_hooks: Vec::new(),
             getblock_hooks: Vec::new(),
             setblock_hooks: Vec::new(),
+            oninit_hooks: Vec::new(),
             values: HashMap::new(),
             extensions: HashMap::new(),
             onconnect_hooks: Vec::new(),
@@ -748,6 +769,16 @@ impl PreGMTS {
         >,
     ) {
         self.commands.insert(command, Command { data: CommandData { args: args.to_string(), desc: desc.to_string() }, closure });
+    }
+    pub fn register_oninitialize(
+        &mut self,
+        closure: Box<
+            dyn Fn(CMDGMTS) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                + Send
+                + Sync,
+        >,
+    ) {
+        self.oninit_hooks.push(closure);
     }
     pub fn register_pmta_hook(
         &mut self,
@@ -933,6 +964,10 @@ impl GMTS {
             //let generator = FlatWorldGenerator::new(64, BlockIds::AIR, BlockIds::SAND, BlockIds::AIR);
             //let mut world = World::new(generator, 128, 128, 128);
             log::info!("Loading world from {}", &super::CONFIGURATION.world_file);
+            if !std::path::Path::new(&super::CONFIGURATION.world_file).exists() {
+                log::error!("World file does not exist!");
+                std::process::exit(1);
+            }
             let mut world = World::from_file(&super::CONFIGURATION.world_file).expect("Failed to init world");
             log::info!("Finished initializing world");
             loop {
@@ -1288,6 +1323,8 @@ impl GMTS {
         });
         let mut recv = cmd_recver;
         let commands = pre_gmts.commands;
+        let commands_list = all_commands.clone();
+        let cmd_gmts_4 = cmd_gmts.clone();
         tokio::spawn(async move {
             loop {
                 match recv.recv().await.unwrap() {
@@ -1308,9 +1345,15 @@ impl GMTS {
                             match x {
                                 0 => (),
                                 1 => {
-                                    cmd_gmts
+                                    if let Some(data) = commands_list.get(&command[0]) {
+                                        cmd_gmts
+                                        .chat_to_id(&format!("&cInvalid syntax. Syntax: /{} {}", &command[0], data.args), -1, executor_id)
+                                        .await;
+                                    } else {
+                                        cmd_gmts
                                         .chat_to_id(&format!("&cInvalid syntax."), -1, executor_id)
                                         .await;
+                                    }
                                 }
                                 2 => {
                                     cmd_gmts
@@ -1334,6 +1377,11 @@ impl GMTS {
                 }
             }
         });
+        for hook in &pre_gmts.oninit_hooks {
+            if let None = hook(cmd_gmts_4.clone()).await {
+                log::error!("An error occured executing an OnInitialize hook.");
+            }
+        }
         GMTS {
             world_send,
             players_send,
@@ -1350,6 +1398,20 @@ impl GMTS {
         }
     }
     //    pub extensions: HashMap<String, CPEExtensionData>,
+    pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
+        self.message_to_id(PlayerCommand::PlayerTeleport { position: position.clone(), id: -1 }, id).await?;
+        self.send_position_update(id, position).await;
+        Some(())
+    }
+    pub async fn msg_broadcast(&self, message: PlayerCommand) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::PassMessageToAll { message, res_send })
+            .await
+            .ok()?;
+        res_recv.await.ok()?;
+        Some(())
+    }
     pub async fn chat_broadcast(&self, message: &str, id: i8) -> Option<()> {
         log::info!("[CHAT]: {}", message);
         let (res_send, res_recv) = oneshot::channel();
@@ -1814,6 +1876,9 @@ pub enum PlayerCommand {
     Disconnect {
         reason: String,
     },
+    RawPacket {
+        bytes: Vec<u8>,
+    }
 }
 pub struct ExtEntry {
     extname: String,

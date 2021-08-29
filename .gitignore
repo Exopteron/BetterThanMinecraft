@@ -3,7 +3,10 @@
 /*.cw
 /whitelist.toml
 /Config.toml
+/Cargo.lock
 /ops.toml
+/banlist.toml
+/ServerTest
 /src/modernchunks.rs
 /src/mcprotocol.rs.old
 /src/mains.rs

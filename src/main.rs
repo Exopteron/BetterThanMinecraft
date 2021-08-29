@@ -55,6 +55,7 @@ use game::*;
 use serde::Deserialize;
 #[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
+  spawn_protection_radius: u64,
   whitelist_enabled: bool,
   listen_address: String,
   world_file: String,
@@ -74,14 +75,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         0
     })
 }));
-  if CONFIGURATION.public {}
+if CONFIGURATION.public {}
+  settings::get_whitelist();
+  settings::get_ops();
+  settings::get_banlist();
+  log::info!("Starting BetterThanMinecraft v{}.", VERSION);
   use tokio::runtime::Runtime;
   plugins::coreutils::CoreUtils::initialize(&mut pregmts);
   //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
   let data = PlayerData { position: None };
-  let (console_send, mut console_recv) = stdmpsc::channel::<PlayerCommand>();
+  let (console_send, console_recv) = stdmpsc::channel::<PlayerCommand>();
   let player = Player {
     data: data,
     op: true,
@@ -140,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       let gmts = gmts2.clone();
       tokio::spawn(async move {
         if let None = new_incoming_connection_handler(stream, &gmts).await {
-          log::error!("Player join error!");
+          //log::error!("Player join error!");
         }
       });
     }
@@ -179,7 +184,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
       stream
         .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
         .await.ok()?;
-        log::info!("s");
+      log::info!(r#"{} tried to join with a too long name!"#, user_name);
       return None;
     }
     let our_id = gmts.get_unused_id().await?; 
@@ -268,14 +273,17 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
         log::info!("{} doesn't support CPE.", user_name);
       return None;
     }
-    let whitelist = settings::get_whitelist();
+    let x = gmts.get_value("Coreutils_Whitelist").await?;
+    let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
+    let (whitelist_enabled, whitelist) = whitelist.clone();
+    //let whitelist = settings::get_whitelist();
     let mut in_whitelist = false;
     for person in whitelist {
       if user_name == person {
         in_whitelist = true;
       }
     }
-    if !in_whitelist && permission_level < 4 && CONFIGURATION.whitelist_enabled {
+    if !in_whitelist && permission_level < 4 && whitelist_enabled {
       let packet = classic::Packet::Disconnect {
         reason: "You are not white-listed on this server!".to_string(),
       };
@@ -455,6 +463,12 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
                   return None;
                 }
               }
+              PlayerCommand::RawPacket { bytes } => {
+                let write = writehalf.write_all(&bytes).await;
+                if write.is_err() {
+                  return None;
+                }
+              }
             }
           }
           Err(_) => {
@@ -533,7 +547,7 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
                     if let Some(x) = gmts.get_block(block.position).await {
                         gmts.block_to_id(x, our_id as i8).await;
                     } else {
-                      log::error!("Block error!");
+                      //log::error!("Block error!");
                     }
                 }
               }
@@ -546,7 +560,7 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
                   if let Some(x) = gmts.get_block(block.position).await {
                       gmts.block_to_id(x, our_id as i8).await;
                   } else {
-                    log::error!("Block error!");
+                    //log::error!("Block error!");
                   }
                 }
               }
