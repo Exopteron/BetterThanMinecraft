@@ -432,14 +432,19 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
                 }
               }
               PlayerCommand::Message { id, message } => {
-                let packet = classic::Packet::Message {
-                  player_id: id,
-                  message,
-                };
-                let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                  return None;
+                let message = message.as_bytes().to_vec();
+                let message = message.chunks(64).collect::<Vec<&[u8]>>();
+                for message in message {
+                  let message = String::from_utf8_lossy(message).to_string();
+                  let packet = classic::Packet::Message {
+                    player_id: id,
+                    message,
+                  };
+                  let packet = ClassicPacketWriter::serialize(packet).unwrap();
+                  let write = writehalf.write_all(&packet).await;
+                  if write.is_err() {
+                    return None;
+                  }
                 }
               }
               PlayerCommand::Disconnect { reason } => {

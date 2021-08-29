@@ -125,6 +125,9 @@ impl World {
   pub fn get_world_spawnpos(&self) -> &Option<super::game::PlayerPosition> {
     &self.spawnpos
   }
+  pub fn set_world_spawnpos(&mut self, pos: super::game::PlayerPosition) {
+    self.spawnpos = Some(pos);
+  }
   pub fn pos_to_index(&self, x: usize, y: usize, z: usize) -> Option<usize> {
     Some(((z + y * self.length) * self.width + x))
     //(z.checked_add(y.checked_mul(self.length)?)?).checked_mul(self.width.checked_add(x)?)

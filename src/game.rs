@@ -338,6 +338,17 @@ impl CMDGMTS {
         res_recv.await.ok()?;
         Some(())
     }
+    pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetPosition {
+                id: id as u32,
+                res_send,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_username(&self, id: i8) -> Option<String> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -350,6 +361,9 @@ impl CMDGMTS {
         res_recv.await.ok()?
     }
     pub async fn set_permission_level(&self, id: i8, level: usize) -> Option<()> {
+        if id < 0 {
+            return None;
+        }
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::SetPermissionLevel {
@@ -590,6 +604,27 @@ impl CMDGMTS {
     }
     pub async fn get_commands_list(&self) -> HashMap<String, CommandData> {
         self.commands_list.clone()
+    }
+    pub async fn set_spawnpos(&self, position: PlayerPosition) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.world_send
+            .send(WorldCommand::SetSpawnPosition {
+                res_send,
+                position,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?
+    }
+    pub async fn get_spawnpos(&self) -> Option<PlayerPosition> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.world_send
+            .send(WorldCommand::GetSpawnPosition {
+                res_send,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?
     }
 }
 use std::any::{Any, TypeId};
@@ -920,6 +955,11 @@ impl GMTS {
                             panic!("Shouldn't fail!");
                         }
                     }
+                    WorldCommand::SetSpawnPosition { res_send, position } => {
+                        if let Err(e) = res_send.send(Some(world.set_world_spawnpos(position))) {
+                            panic!("Shouldn't fail!");  
+                        }
+                    }
                     WorldCommand::SaveWorld { res_send } => {
                         log::info!("Saving world");
                         res_send.send(world.save()).expect(ERR_SENDING_RESULT);
@@ -1113,8 +1153,9 @@ impl GMTS {
                         position,
                         res_send,
                     } => {
-                        if let Some(us) = players.get(&my_id) {
+                        if let Some(us) = players.get_mut(&my_id) {
                             let id = us.id.clone();
+                            us.data.position = Some(position.clone());
                             drop(us);
                             for player in &players {
                                 if player.1.id != id {
@@ -1419,6 +1460,17 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn set_spawnpos(&self, position: PlayerPosition) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.world_send
+            .send(WorldCommand::SetSpawnPosition {
+                res_send,
+                position,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_spawnpos(&self) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
@@ -1579,6 +1631,17 @@ impl GMTS {
             .await
             .ok()?;
         res_recv.await.ok()
+    }
+    pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetPosition {
+                id: id as u32,
+                res_send,
+            })
+            .await
+            .ok()?;
+        res_recv.await.ok()?
     }
     pub async fn get_username(&self, id: i8) -> Option<String> {
         let (res_send, res_recv) = oneshot::channel();
@@ -1773,6 +1836,10 @@ pub enum WorldCommand {
     },
     GetSpawnPosition {
         res_send: oneshot::Sender<Option<PlayerPosition>>,
+    },
+    SetSpawnPosition {
+        position: PlayerPosition,
+        res_send: oneshot::Sender<Option<()>>,
     },
     SaveWorld {
         res_send: oneshot::Sender<Option<()>>,

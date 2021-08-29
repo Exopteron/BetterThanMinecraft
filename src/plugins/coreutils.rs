@@ -41,6 +41,36 @@ impl crate::game::Plugin for CoreUtils {
             }),
         );
         pre_gmts.register_command(
+            "setworldspawn".to_string(),
+            "",
+            "Set the world spawnpoint to your current position.",
+            Box::new(move |gmts: CMDGMTS, args, sender| {
+                Box::pin(async move {
+                    if let Some(p) = gmts.get_permission_level(sender).await {
+                        if p >= 4 {
+                            let position = if let Some(p) = gmts.get_position(sender).await {
+                                p
+                            } else {
+                                return 3;
+                            };
+                            gmts.set_spawnpos(position).await;
+                            let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                n
+                            } else {
+                                return 3;
+                            };
+                            gmts.chat_to_permlevel(&format!("&d[{}: Set the spawnpoint to {} {} {}]", our_name, position.x / 32 , position.y / 32, position.z / 32), -1, 4).await;
+                        } else {
+                            return 2;
+                        }
+                    } else {
+                        return 3;
+                    };
+                    0
+                })
+            }),
+        );
+        pre_gmts.register_command(
             "permlevel".to_string(),
             "",
             "Get your permission level",
@@ -225,15 +255,25 @@ impl crate::game::Plugin for CoreUtils {
                             } else {
                                 return 1;
                             };
-                            let reason = &args[1..].join(" ");
-                            gmts.chat_to_id(&format!("&fKicking user {}", args[0]), -1, sender).await;
-                            let our_name = if let Some(n) = gmts.get_username(sender).await {
-                                n
-                            } else {
-                                return 3;
+                            let their_p_level = match gmts.get_permission_level(their_id).await {
+                                Some(x) => x,
+                                None => {
+                                    return 1;
+                                }
                             };
-                            gmts.chat_to_permlevel(&format!("&d[{}: Kicking user {}]", our_name, args[0]), -1, 4).await;
-                            gmts.kick_user_by_name(&args[0], reason).await;
+                            if their_p_level > p {
+                                gmts.chat_to_id("Can't kick a user with higher permissions.", -1, sender).await;
+                            } else {
+                                let reason = &args[1..].join(" ");
+                                gmts.chat_to_id(&format!("&fKicking user {}", args[0]), -1, sender).await;
+                                let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                    n
+                                } else {
+                                    return 3;
+                                };
+                                gmts.chat_to_permlevel(&format!("&d[{}: Kicking user {}]", our_name, args[0]), -1, 4).await;
+                                gmts.kick_user_by_name(&args[0], reason).await;
+                            }
                         } else {
                             return 2;
                         }
@@ -308,10 +348,16 @@ impl crate::game::Plugin for CoreUtils {
                                     return 1;
                                 }
                             };
+                            if their_p_level > p {
+                                gmts.chat_to_id(&format!("{} has higher permissions!", args[0]), -1, sender).await;
+                                return 0;
+                            }
                             if their_p_level <= 1 {
                                 gmts.chat_to_id(&format!("{} is already not an op!", args[0]), -1, sender).await;
                             } else {
-                                gmts.set_permission_level(their_id, 1).await;
+                                if let None = gmts.set_permission_level(their_id, 1).await {
+                                    return 3;
+                                }
                                 gmts.chat_to_id(&format!("De-opping user {}", args[0]), -1, sender).await;
                                 gmts.chat_to_id("&eYou are no longer op!", -1, their_id).await;
                                 settings::remove_op(&args[0]);
