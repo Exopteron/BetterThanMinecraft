@@ -49,7 +49,7 @@ use game::*;
 #[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
   authenticate_usernames: bool,
-  show_on_server_list: bool,
+  do_heartbeat: bool,
   spawn_protection_radius: u64,
   whitelist_enabled: bool,
   listen_address: String,

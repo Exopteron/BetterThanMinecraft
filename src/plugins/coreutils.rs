@@ -13,6 +13,7 @@ Command plan:
 /tppos - tp user to position
 /say - say message
 */
+use tokio::time::{sleep, Duration};
 fn random_server_salt() -> String {
     use rand::RngCore;
     let mut bytes = vec![0; 15];
@@ -31,7 +32,7 @@ impl crate::game::Plugin for CoreUtils {
                     },
                 )
                 .await;
-                if CONFIGURATION.show_on_server_list {
+                if CONFIGURATION.do_heartbeat {
                     let hb_gmts = gmts.clone();
                     tokio::spawn(async move {
                         loop {
@@ -76,13 +77,13 @@ impl crate::game::Plugin for CoreUtils {
                             let buf2 = buf2.split(" ").collect::<Vec<&str>>();
                             if buf2[1] != "200" {
                                 log::error!("Heartbeat error! Got response code {}. Trying again in 5 seconds...", buf2[1]);
-                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                sleep(Duration::from_secs(5)).await;
                                 continue;
                             }
                             let buf = buf.split("\r\n").collect::<Vec<&str>>();
                             let url = buf[buf.len() - 4];
                             log::info!("Server URL: [{}]", url);
-                            std::thread::sleep(std::time::Duration::from_secs(45));
+                            sleep(Duration::from_secs(45)).await;
                         }
                     });
                 }

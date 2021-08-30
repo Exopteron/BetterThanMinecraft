@@ -29,16 +29,28 @@ struct SerializeWhitelist {
     whitelisted: Vec<String>,
 }
 const DEFAULT_CONFIG: &str = r#"# Default config
+
+# Do we authenticate users?
 authenticate_usernames = true
-show_on_server_list = true
+# Do we perform the heartbeat to classicube.net?
+do_heartbeat = true
+# Spawn protection radius in blocks. (bypassable by ops)
 spawn_protection_radius = 32
+# Whitelist enabled?
 whitelist_enabled = false
+# Path to the world file.
 world_file = "world.cw"
+# Listen address.
 listen_address = "0.0.0.0:25565"
+# Can admins join if the server is full?
 admin_slot = false
+# Do we show on the server list?
 public = true
+# Server name.
 server_name = "BetterThanMinecraft"
+# Maximum players. (up to 127)
 max_players = 20
+# Message of the day.
 motd = "A BetterThanMinecraft server"
 "#;
 pub fn get_options() -> ServerOptions {
