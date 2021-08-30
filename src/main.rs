@@ -34,28 +34,22 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 mod chunks;
 pub mod classic;
 pub mod plugins;
-use chunks::{FlatWorldGenerator, World};
 use classic::*;
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 pub const ERR_SENDING_RESULT: &str = "Error sending result";
-use chrono::Local;
-use env_logger::Builder;
-use log::LevelFilter;
 use once_cell::sync::Lazy;
-use std::io::Write;
-use std::sync::mpsc as stdmpsc;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 pub mod game;
 pub mod settings;
 use game::*;
-use serde::Deserialize;
 #[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
+  authenticate_usernames: bool,
+  show_on_server_list: bool,
   spawn_protection_radius: u64,
   whitelist_enabled: bool,
   listen_address: String,
@@ -78,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     "ver".to_string(),
     "",
     "Get server version",
-    Box::new(|gmts, args, sender| {
+    Box::new(|gmts, _, sender| {
       Box::pin(async move {
         gmts
           .chat_to_id(
@@ -100,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
+  let gmts = Arc::new(gmts);
   let data = PlayerData { position: None };
   let (console_send, mut console_recv) = mpsc::channel::<PlayerCommand>(1000);
   let player = Player {
@@ -113,10 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     supported_extensions: None,
   };
   gmts.register_user(player).await.unwrap();
-  let (send_1, mut recv_1) = oneshot::channel::<Option<()>>();
-  let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
   let cgmts_1 = gmts.clone();
-  let cgmts_2 = gmts.clone();
   tokio::spawn(async move {
     loop {
       let mut command = String::new();
@@ -136,9 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
       if let Some(msg) = console_recv.recv().await {
         match msg {
-          PlayerCommand::Message { id, message } => {
+/*           PlayerCommand::Message { id, message } => {
             //log::info!("[MESSAGE TO CONSOLE] {}", message);
-          }
+          } */
           _ => {}
         }
       }
@@ -150,7 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
   log::info!("Server listening on {}", CONFIGURATION.listen_address);
-  let gmts = Arc::new(gmts);
   loop {
     let possible = listener.accept().await;
     if possible.is_err() {
@@ -171,7 +162,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
   let packet = ClassicPacketReader::read_packet_reader(&mut test)
     .await
     .ok()?;
-  let (msg_send, recv) = mpsc::channel::<PlayerCommand>(100000000);
+  let (msg_send, recv) = mpsc::channel::<PlayerCommand>(100);
   drop(test);
   if let classic::Packet::PlayerIdentification {
     p_ver,
@@ -180,18 +171,51 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
     cpe_id,
   } = packet
   {
-    let player_count = gmts.player_count().await?;
-    if player_count + 1 > CONFIGURATION.max_players {
-      let packet = classic::Packet::Disconnect {
-        reason: "Server is full!".to_string(),
+    if CONFIGURATION.authenticate_usernames {
+      let x = if let Some(l) = gmts.get_value("Coreutils_HeartbeatSalt").await {
+          l
+      } else {
+          log::error!("Verify name error!");
+          return None;
       };
-      stream
-        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await
-        .ok()?;
-      log::info!("Kicked {} because the server is full.", user_name);
-      return None;
-    }
+      let salt = if let Some(l) = x.val.downcast_ref::<String>() {
+          l
+      } else {
+          log::error!("Verify name error!");
+          return None;
+      };
+      use md5::{Md5, Digest};
+      let mut hasher = Md5::new();
+      hasher.update(salt);
+      hasher.update(user_name.clone());
+      let hash = hasher.finalize().to_vec();
+      let hash = hex::encode(&hash);
+      if v_key != hash {
+          log::info!("Bad authentication! Got {}, expected {}!", v_key, hash);
+          let packet = crate::classic::Packet::Disconnect {
+              reason: "Could not authenticate.".to_string(),
+          };
+          stream
+              .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+              .await
+              .ok()?;
+          return None;
+      }
+  }
+  let banlist = settings::get_banlist();
+  for ban in banlist {
+      if ban.username == user_name {
+          let packet = crate::classic::Packet::Disconnect {
+              reason: ban.reason.clone(),
+          };
+          stream
+              .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+              .await
+              .ok()?;
+          log::info!("{} is banned for {}!", ban.username, ban.reason);
+          return None;
+      }
+  }
     if user_name.len() >= 20 {
       let packet = classic::Packet::Disconnect {
         reason: "Name too long!".to_string(),
@@ -207,15 +231,6 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
     let data = PlayerData {
       position: Some(spawn_position.clone()),
     };
-    if let Some(_) = gmts
-      .kick_user_by_name(&user_name, "You logged in from another location")
-      .await
-    {
-      log::info!(
-        "{} was already logged in! Kicked other instance.",
-        user_name
-      );
-    }
     let mut permission_level: usize;
     let mut op: bool;
     let cpe = match cpe_id {
@@ -253,7 +268,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
           .ok()?;
       }
       let mut test = Box::pin(&mut stream);
-      let (appname, extcount) = if let classic::Packet::ExtInfo {
+      let (_, extcount) = if let classic::Packet::ExtInfo {
         appname,
         extension_count,
       } = ClassicPacketReader::read_packet_reader(&mut test)
@@ -322,27 +337,48 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       log::info!("{} doesn't support CPE.", user_name);
       return None;
     }
-    let x = gmts.get_value("Coreutils_Whitelist").await?;
-    let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
-    let (whitelist_enabled, whitelist) = whitelist.clone();
-    //let whitelist = settings::get_whitelist();
-    let mut in_whitelist = false;
-    for person in whitelist {
-      if user_name == person {
-        in_whitelist = true;
-      }
+    let player_count = gmts.player_count().await?;
+  if player_count + 1 > CONFIGURATION.max_players && (permission_level < 4 || player_count + 1 >= 127 || !CONFIGURATION.admin_slot ) {
+    let packet = classic::Packet::Disconnect {
+      reason: "Server is full!".to_string(),
+    };
+    stream
+      .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+      .await
+      .ok()?;
+    log::info!("Kicked {} because the server is full.", user_name);
+    return None;
+  }
+  let x = gmts.get_value("Coreutils_Whitelist").await?;
+  let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
+  let (whitelist_enabled, whitelist) = whitelist.clone();
+  //let whitelist = settings::get_whitelist();
+  let mut in_whitelist = false;
+  for person in whitelist {
+    if user_name == person {
+      in_whitelist = true;
     }
-    if !in_whitelist && permission_level < 4 && whitelist_enabled {
-      let packet = classic::Packet::Disconnect {
-        reason: "You are not white-listed on this server!".to_string(),
-      };
-      stream
-        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await
-        .ok()?;
-      log::info!("{} is not whitelisted.", user_name);
-      return None;
-    }
+  }
+  if !in_whitelist && permission_level < 4 && whitelist_enabled {
+    let packet = classic::Packet::Disconnect {
+      reason: "You are not white-listed on this server!".to_string(),
+    };
+    stream
+      .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+      .await
+      .ok()?;
+    log::info!("{} is not whitelisted.", user_name);
+    return None;
+  }
+  if let Some(_) = gmts
+  .kick_user_by_name(&user_name, "You logged in from another location")
+  .await
+{
+  log::info!(
+    "{} was already logged in! Kicked other instance.",
+    user_name
+  );
+}
     let player = Player {
       data: data,
       op,
@@ -361,6 +397,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       &user_name.clone(),
       our_id as u32,
       p_ver,
+      v_key.to_string(),
       op,
       cpe,
     )
@@ -390,19 +427,21 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
   Some(())
 }
 async fn internal_inc_handler(
-  mut stream: TcpStream,
+  stream: TcpStream,
   gmts: Arc<GMTS>,
   mut reciever: mpsc::Receiver<PlayerCommand>,
   our_username: &str,
   our_id: u32,
   our_p_ver: u8,
+  v_token: String,
   op: bool,
   cpe: bool,
 ) -> Option<()> {
      let hooks = gmts.get_earlyonconnect_hooks().await;
   let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
+  let v_token = std::sync::Arc::new(v_token);
   for hook in &*hooks {
-    hook(gmts.clone(), stream.clone(), our_id as i8).await?;
+    hook(gmts.clone(), stream.clone(), v_token.clone(), our_id as i8).await?;
   }
   let stream = std::sync::Arc::try_unwrap(stream).ok()?;
   let mut stream = stream.into_inner();
@@ -443,7 +482,7 @@ async fn internal_inc_handler(
     player_id: -1,
     position: PlayerPosition::from_pos(94, 38, 66),
   };
-  let iswrite = stream
+  stream
     .write_all(&ClassicPacketWriter::serialize(teleport_player).ok()?)
     .await
     .ok()?;
@@ -568,7 +607,6 @@ async fn internal_inc_handler(
   let our_username = our_username.to_string();
   let packet_handler_wrapper = || async move {
     //let mut stored_msg = String::new();
-    use tokio::io::AsyncReadExt;
     loop {
       match recv_2.try_recv() {
         Ok(_) => {
@@ -599,7 +637,7 @@ async fn internal_inc_handler(
       }
       let packet = packet.unwrap();
       match packet {
-        classic::Packet::PlayerClicked {
+/*         classic::Packet::PlayerClicked {
           button,
           action,
           yaw,
@@ -609,7 +647,7 @@ async fn internal_inc_handler(
           target_block_y,
           target_block_z,
           target_block_face,
-        } => {}
+        } => {} */
         classic::Packet::SetBlockC {
           coords,
           mode,
@@ -647,7 +685,7 @@ async fn internal_inc_handler(
         classic::Packet::PositionAndOrientationC { position, .. } => {
           gmts.send_position_update(our_id as i8, position).await;
         }
-        classic::Packet::MessageC { message, unused } => {
+        classic::Packet::MessageC { message, .. } => {
           //if unused == 0 {
           if message.starts_with("/") {
             gmts.execute_command(our_id as i8, message).await;
@@ -688,4 +726,21 @@ async fn internal_inc_handler(
   //a.ok()?;
   //b.ok()?;
   None
+}
+
+pub fn strip_mc_colorcodes(input: &str) -> String {
+  let mut chars = input.chars().collect::<Vec<char>>();
+  let mut flag = false;
+  chars.retain(|character| {
+      if flag {
+          flag = false;
+          return false;
+      }
+      if character == &'&' {
+          flag = true;
+          return false;
+      }
+      true
+  });
+  return chars.into_iter().collect::<String>();
 }

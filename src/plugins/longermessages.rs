@@ -21,7 +21,7 @@ impl crate::game::Plugin for LongerMessagesCPE {
                 return Some(());
             })
         }));
-         pre_gmts.register_early_onconnect_hook(Box::new(|gmts, stream, id| {
+         pre_gmts.register_early_onconnect_hook(Box::new(|gmts, stream, v_token, id| {
             Box::pin(async move {
                 let supported_extensions = if let Some(x) = gmts.get_supported_extensions(id).await {
                     x
@@ -38,7 +38,6 @@ impl crate::game::Plugin for LongerMessagesCPE {
         pre_gmts.register_packet_hook(0x0d, Box::new(|gmts, stream, packet_id, sender_id| {
             Box::pin(async move {
                 let mut stream = stream.lock().await;
-                use tokio::io::AsyncReadExt;
                 if let crate::classic::Packet::MessageC { message, unused } = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream)).await.ok()? {
                     let our_username = gmts.get_username(sender_id as i8).await?;
                     let our_id = sender_id;

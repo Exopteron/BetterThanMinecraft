@@ -1,6 +1,5 @@
 use super::chunks::*;
 use std::collections::HashMap;
-use std::sync::mpsc as stdmpsc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
@@ -145,7 +144,8 @@ impl Player {
             .send(PlayerCommand::PlayerTeleport {
                 position: *position,
                 id,
-            }).await
+            })
+            .await
             .ok()
     }
 }
@@ -168,57 +168,65 @@ pub enum Protocol {
 #[derive(Clone)]
 pub struct GMTS {
     // GMTS short for: Game Managing Task ~~Senders~~ System
-    pub world_send: mpsc::Sender<WorldCommand>,
-    pub players_send: mpsc::Sender<PlayersCommand>,
-    pub tempcrntid_send: mpsc::Sender<TempCrntIdCommand>,
-    pub commands_send: mpsc::Sender<CommandsCommand>,
+    pub world_send: mpsc::UnboundedSender<WorldCommand>,
+    pub players_send: mpsc::UnboundedSender<PlayersCommand>,
+    pub tempcrntid_send: mpsc::UnboundedSender<TempCrntIdCommand>,
+    pub commands_send: mpsc::UnboundedSender<CommandsCommand>,
     pub extensions: HashMap<String, CPEExtensionData>,
-    pub storage_send: mpsc::Sender<StorageCommand>,
+    pub storage_send: mpsc::UnboundedSender<StorageCommand>,
     pub commands_list: HashMap<String, CommandData>,
     pub cpe_required: bool,
-    pub onconnect_hooks: Arc<Vec<
-        Box<
-            dyn Fn(
-                    Arc<GMTS>,
-                    Arc<Mutex<tokio::net::TcpStream>>,
-                    i8,
-                ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
+    pub onconnect_hooks: Arc<
+        Vec<
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::TcpStream>>,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
         >,
-    >>,
-    pub earlyonconnect_hooks: Arc<Vec<
-        Box<
-            dyn Fn(
-                    Arc<GMTS>,
-                    Arc<Mutex<tokio::net::TcpStream>>,
-                    i8,
-                ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
+    >,
+    pub earlyonconnect_hooks: Arc<
+        Vec<
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::TcpStream>>,
+                        Arc<String>,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
         >,
-    >>,
-    pub packet_recv_hooks: Arc<HashMap<
-        u8,
-        Box<
-            dyn Fn(
-                    Arc<GMTS>,
-                    Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
-                    u8,
-                    i8,
-                ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
+    >,
+    pub packet_recv_hooks: Arc<
+        HashMap<
+            u8,
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
+                        u8,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
         >,
-    >>,
-    pub ondisconnect_hooks: Arc<Vec<Box<
-        dyn Fn(
-            Arc<GMTS>,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>>,
+    >,
+    pub ondisconnect_hooks: Arc<
+        Vec<
+            Box<
+                dyn Fn(Arc<GMTS>, i8) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    >,
 }
 #[derive(Clone)]
 pub struct CPEExtensionData {
@@ -227,28 +235,28 @@ pub struct CPEExtensionData {
 }
 #[derive(Clone)]
 pub struct CMDGMTS {
-    pub world_send: mpsc::Sender<WorldCommand>,
-    pub players_send: mpsc::Sender<PlayersCommand>,
-    pub tempcrntid_send: mpsc::Sender<TempCrntIdCommand>,
-    pub storage_send: mpsc::Sender<StorageCommand>,
+    pub world_send: mpsc::UnboundedSender<WorldCommand>,
+    pub players_send: mpsc::UnboundedSender<PlayersCommand>,
+    pub tempcrntid_send: mpsc::UnboundedSender<TempCrntIdCommand>,
+    pub storage_send: mpsc::UnboundedSender<StorageCommand>,
     pub commands_list: HashMap<String, CommandData>,
 }
 impl CMDGMTS {
     pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
-        self.message_to_id(PlayerCommand::PlayerTeleport { position, id: -1 }, id).await?;
+        self.message_to_id(PlayerCommand::PlayerTeleport { position, id: -1 }, id)
+            .await?;
         Some(())
     }
     pub async fn msg_broadcast(&self, message: PlayerCommand) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
     }
     pub async fn chat_broadcast(&self, message: &str, id: i8) -> Option<()> {
-        log::info!("[CHAT]: {}", message);
+        log::info!("[CHAT]: {}", crate::strip_mc_colorcodes(message));
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -256,7 +264,6 @@ impl CMDGMTS {
         };
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -274,16 +281,15 @@ impl CMDGMTS {
                 res_send,
                 level,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
     }
     pub async fn chat_to_id(&self, message: &str, id: i8, target_id: i8) -> Option<()> {
         if let Some(n) = Self::get_username(&self, target_id).await {
-            log::info!("[CHAT to {}]: {}", n, message);
+            log::info!("[CHAT to {}]: {}", n, crate::strip_mc_colorcodes(message));
         } else {
-            log::info!("[CHAT to {}]: {}", target_id, message);
+            log::info!("[CHAT to {}]: {}", target_id, crate::strip_mc_colorcodes(message));
         }
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
@@ -296,7 +302,6 @@ impl CMDGMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -309,7 +314,6 @@ impl CMDGMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -323,7 +327,6 @@ impl CMDGMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -334,7 +337,7 @@ impl CMDGMTS {
         id: i8,
         target_username: String,
     ) -> Option<()> {
-        log::info!("[CHAT to {}]: {}", target_username, message);
+        log::info!("[CHAT to {}]: {}", target_username, crate::strip_mc_colorcodes(message));
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -346,7 +349,6 @@ impl CMDGMTS {
                 username: target_username,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -358,7 +360,6 @@ impl CMDGMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -369,7 +370,6 @@ impl CMDGMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -384,7 +384,6 @@ impl CMDGMTS {
                 level,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -395,18 +394,19 @@ impl CMDGMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
-    pub async fn get_supported_extensions(&self, id: i8) -> Option<HashMap<String, CPEExtensionData>> {
+    pub async fn get_supported_extensions(
+        &self,
+        id: i8,
+    ) -> Option<HashMap<String, CPEExtensionData>> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::GetSupportedExtensions {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -414,7 +414,6 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::GetID { username, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -425,7 +424,6 @@ impl CMDGMTS {
                 user_id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -436,7 +434,6 @@ impl CMDGMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -444,15 +441,21 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.tempcrntid_send
             .send(TempCrntIdCommand::FetchFreeID { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
-    pub async fn pass_message_to_permlevel(&self, message: PlayerCommand, level: usize) -> Option<()> {
+    pub async fn pass_message_to_permlevel(
+        &self,
+        message: PlayerCommand,
+        level: usize,
+    ) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
-            .send(PlayersCommand::PassMessageToPermLevel { message, res_send, level })
-            .await
+            .send(PlayersCommand::PassMessageToPermLevel {
+                message,
+                res_send,
+                level,
+            })
             .ok()?;
         res_recv.await.ok()
     }
@@ -460,20 +463,16 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
     pub async fn send_position_update(&self, id: i8, position: PlayerPosition) {
         let (res_send, res_recv) = oneshot::channel();
-        let x = self
-            .players_send
-            .send(PlayersCommand::UpdatePosition {
-                my_id: id as u32,
-                position,
-                res_send,
-            })
-            .await;
+        let x = self.players_send.send(PlayersCommand::UpdatePosition {
+            my_id: id as u32,
+            position,
+            res_send,
+        });
         if x.is_err() {
             panic!("Error sending position update!");
         }
@@ -486,7 +485,6 @@ impl CMDGMTS {
                 pos: block,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -499,14 +497,13 @@ impl CMDGMTS {
                 players_send: self.players_send.clone(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn stop_server(&self) -> Option<()> {
         let message = PlayerCommand::Disconnect {
             reason: "Server closed".to_string(),
-          };
+        };
         self.pass_message_to_all(message).await?;
         self.save_world().await?;
         std::process::exit(0);
@@ -515,7 +512,6 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::SaveWorld { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -523,7 +519,6 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::GetWorld { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -535,7 +530,6 @@ impl CMDGMTS {
                 reason: reason.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -543,7 +537,6 @@ impl CMDGMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::NewUser { user, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -554,7 +547,6 @@ impl CMDGMTS {
                 my_id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -565,7 +557,6 @@ impl CMDGMTS {
                 key: key.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -576,7 +567,6 @@ impl CMDGMTS {
                 key: key.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -588,7 +578,6 @@ impl CMDGMTS {
                 value,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -600,17 +589,20 @@ impl CMDGMTS {
                 value,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
+    }
+    pub async fn player_list(&self) -> Option<Vec<String>> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::OnlinePlayers { res_send })
+            .ok()?;
+        res_recv.await.ok()
     }
     pub async fn player_count(&self) -> Option<usize> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
-            .send(PlayersCommand::OnlinePlayerCount {
-                res_send,
-            })
-            .await
+            .send(PlayersCommand::OnlinePlayerCount { res_send })
             .ok()?;
         res_recv.await.ok()
     }
@@ -620,26 +612,19 @@ impl CMDGMTS {
     pub async fn set_spawnpos(&self, position: PlayerPosition) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
-            .send(WorldCommand::SetSpawnPosition {
-                res_send,
-                position,
-            })
-            .await
+            .send(WorldCommand::SetSpawnPosition { res_send, position })
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn get_spawnpos(&self) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
-            .send(WorldCommand::GetSpawnPosition {
-                res_send,
-            })
-            .await
+            .send(WorldCommand::GetSpawnPosition { res_send })
             .ok()?;
         res_recv.await.ok()?
     }
 }
-use std::any::{Any, TypeId};
+use std::any::{Any};
 use std::sync::Arc;
 #[derive(Clone)]
 pub struct GMTSElement {
@@ -654,30 +639,26 @@ pub struct CommandData {
 }
 pub struct Command {
     pub data: CommandData,
-    pub closure:         Box<
+    pub closure: Box<
         dyn Fn(Arc<CMDGMTS>, Vec<String>, i8) -> Pin<Box<dyn Future<Output = usize> + Send>>
             + Send
             + Sync,
-    >
+    >,
 }
 pub struct PreGMTS {
-    pub commands: HashMap<
-        String,
-        Command,
-    >,
+    pub commands: HashMap<String, Command>,
     pub pmta_hooks: Vec<
         Box<
-            dyn Fn(Arc<CMDGMTS>, PlayerCommand) -> Pin<Box<dyn Future<Output = PlayerCommand> + Send>>
+            dyn Fn(
+                    Arc<CMDGMTS>,
+                    PlayerCommand,
+                ) -> Pin<Box<dyn Future<Output = PlayerCommand> + Send>>
                 + Send
                 + Sync,
         >,
     >,
     pub oninit_hooks: Vec<
-        Box<
-            dyn Fn(Arc<CMDGMTS>) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
-        >,
+        Box<dyn Fn(Arc<CMDGMTS>) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> + Send + Sync>,
     >,
     pub getblock_hooks:
         Vec<fn(Arc<CMDGMTS>, BlockPosition) -> Pin<Box<dyn Future<Output = BlockPosition> + Send>>>,
@@ -708,6 +689,7 @@ pub struct PreGMTS {
             dyn Fn(
                     Arc<GMTS>,
                     Arc<Mutex<tokio::net::TcpStream>>,
+                    Arc<String>,
                     i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
                 + Send
@@ -727,14 +709,11 @@ pub struct PreGMTS {
                 + Sync,
         >,
     >,
-    pub ondisconnect_hooks: Vec<Box<
-        dyn Fn(
-            Arc<GMTS>,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>,
+    pub ondisconnect_hooks: Vec<
+        Box<
+            dyn Fn(Arc<GMTS>, i8) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> + Send + Sync,
+        >,
+    >,
     pub values: HashMap<String, GMTSElement>,
     pub extensions: HashMap<String, CPEExtensionData>,
     pub cpe_required: bool,
@@ -767,14 +746,21 @@ impl PreGMTS {
                 + Sync,
         >,
     ) {
-        self.commands.insert(command, Command { data: CommandData { args: args.to_string(), desc: desc.to_string() }, closure });
+        self.commands.insert(
+            command,
+            Command {
+                data: CommandData {
+                    args: args.to_string(),
+                    desc: desc.to_string(),
+                },
+                closure,
+            },
+        );
     }
     pub fn register_oninitialize(
         &mut self,
         closure: Box<
-            dyn Fn(Arc<CMDGMTS>) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
+            dyn Fn(Arc<CMDGMTS>) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> + Send + Sync,
         >,
     ) {
         self.oninit_hooks.push(closure);
@@ -782,7 +768,10 @@ impl PreGMTS {
     pub fn register_pmta_hook(
         &mut self,
         closure: Box<
-            dyn Fn(Arc<CMDGMTS>, PlayerCommand) -> Pin<Box<dyn Future<Output = PlayerCommand> + Send>>
+            dyn Fn(
+                    Arc<CMDGMTS>,
+                    PlayerCommand,
+                ) -> Pin<Box<dyn Future<Output = PlayerCommand> + Send>>
                 + Send
                 + Sync,
         >,
@@ -791,7 +780,10 @@ impl PreGMTS {
     }
     pub fn register_getblock_hook(
         &mut self,
-        closure: fn(Arc<CMDGMTS>, BlockPosition) -> Pin<Box<dyn Future<Output = BlockPosition> + Send>>,
+        closure: fn(
+            Arc<CMDGMTS>,
+            BlockPosition,
+        ) -> Pin<Box<dyn Future<Output = BlockPosition> + Send>>,
     ) {
         self.getblock_hooks.push(closure);
     }
@@ -813,9 +805,9 @@ impl PreGMTS {
         &mut self,
         closure: Box<
             dyn Fn(
-                Arc<GMTS>,
-                Arc<Mutex<tokio::net::TcpStream>>,
-                i8,
+                    Arc<GMTS>,
+                    Arc<Mutex<tokio::net::TcpStream>>,
+                    i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
                 + Send
                 + Sync,
@@ -826,12 +818,7 @@ impl PreGMTS {
     pub fn register_ondisconnect_hook(
         &mut self,
         closure: Box<
-            dyn Fn(
-                Arc<GMTS>,
-                i8,
-                ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-                + Send
-                + Sync,
+            dyn Fn(Arc<GMTS>, i8) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> + Send + Sync,
         >,
     ) {
         self.ondisconnect_hooks.push(closure);
@@ -840,12 +827,13 @@ impl PreGMTS {
         &mut self,
         closure: Box<
             dyn Fn(
-                Arc<GMTS>,
-                Arc<Mutex<tokio::net::TcpStream>>,
-                i8,
+                    Arc<GMTS>,
+                    Arc<Mutex<tokio::net::TcpStream>>,
+                    Arc<String>,
+                    i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
                 + Send
-                + Sync
+                + Sync,
         >,
     ) {
         self.earlyonconnect_hooks.push(closure);
@@ -853,7 +841,7 @@ impl PreGMTS {
     pub fn register_packet_hook(
         &mut self,
         id: u8,
-        closure:             Box<
+        closure: Box<
             dyn Fn(
                     Arc<GMTS>,
                     Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
@@ -862,7 +850,7 @@ impl PreGMTS {
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
                 + Send
                 + Sync,
-        >
+        >,
     ) {
         self.packet_recv_hooks.insert(id, closure);
     }
@@ -890,11 +878,11 @@ impl PreGMTS {
 impl GMTS {
     pub async fn setup(pre_gmts: PreGMTS) -> Self {
         // Initialize Physics Thread
-        let (world_send, ph_recv) = mpsc::channel::<WorldCommand>(10000000);
-        let (players_send, players_recv) = mpsc::channel::<PlayersCommand>(10000000);
-        let (temp_crnt_id_send, tci_recv) = mpsc::channel::<TempCrntIdCommand>(100000);
-        let (storage_send, store_recv) = mpsc::channel::<StorageCommand>(100000);
-        let (commands_send, cmd_recver) = mpsc::channel::<CommandsCommand>(1000000);
+        let (world_send, ph_recv) = mpsc::unbounded_channel::<WorldCommand>();
+        let (players_send, players_recv) = mpsc::unbounded_channel::<PlayersCommand>();
+        let (temp_crnt_id_send, tci_recv) = mpsc::unbounded_channel::<TempCrntIdCommand>();
+        let (storage_send, store_recv) = mpsc::unbounded_channel::<StorageCommand>();
+        let (commands_send, cmd_recver) = mpsc::unbounded_channel::<CommandsCommand>();
         let storage_send_2 = storage_send.clone();
         let mut all_commands = HashMap::new();
         for (cmd_name, command) in &pre_gmts.commands {
@@ -947,11 +935,13 @@ impl GMTS {
                         }
                     }
                     StorageCommand::RemoveValue { key, res_send } => {
-                        res_send.send(if let Some(_) = storage.remove(&key) {
-                            Some(())
-                        } else {
-                            None
-                        }).expect(ERR_SENDING_RESULT);
+                        res_send
+                            .send(if let Some(_) = storage.remove(&key) {
+                                Some(())
+                            } else {
+                                None
+                            })
+                            .expect(ERR_SENDING_RESULT);
                     }
                 }
             }
@@ -968,7 +958,8 @@ impl GMTS {
                 log::error!("World file does not exist!");
                 std::process::exit(1);
             }
-            let mut world = World::from_file(&super::CONFIGURATION.world_file).expect("Failed to init world");
+            let mut world =
+                World::from_file(&super::CONFIGURATION.world_file).expect("Failed to init world");
             log::info!("Finished initializing world");
             loop {
                 match recv.recv().await.unwrap() {
@@ -981,18 +972,18 @@ impl GMTS {
                         }
                     }
                     WorldCommand::GetWorld { res_send } => {
-                        if let Err(e) = res_send.send(world.clone()) {
+                        if let Err(_) = res_send.send(world.clone()) {
                             panic!("Shouldn't fail!");
                         }
                     }
                     WorldCommand::GetSpawnPosition { res_send } => {
-                        if let Err(e) = res_send.send(*world.get_world_spawnpos()) {
+                        if let Err(_) = res_send.send(*world.get_world_spawnpos()) {
                             panic!("Shouldn't fail!");
                         }
                     }
                     WorldCommand::SetSpawnPosition { res_send, position } => {
-                        if let Err(e) = res_send.send(Some(world.set_world_spawnpos(position))) {
-                            panic!("Shouldn't fail!");  
+                        if let Err(_) = res_send.send(Some(world.set_world_spawnpos(position))) {
+                            panic!("Shouldn't fail!");
                         }
                     }
                     WorldCommand::SaveWorld { res_send } => {
@@ -1020,13 +1011,10 @@ impl GMTS {
                         if !none {
                             if let Some(_) = world.set_block(block.clone()) {
                                 let (res_send2, res_recv2) = oneshot::channel();
-                                if let Ok(_) = players_send
-                                    .send(PlayersCommand::PassMessageToAll {
-                                        message: PlayerCommand::SetBlock { block },
-                                        res_send: res_send2,
-                                    })
-                                    .await
-                                {
+                                if let Ok(_) = players_send.send(PlayersCommand::PassMessageToAll {
+                                    message: PlayerCommand::SetBlock { block },
+                                    res_send: res_send2,
+                                }) {
                                     res_recv2.await.expect("Shouldn't fail");
                                     res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                                 } else {
@@ -1067,11 +1055,15 @@ impl GMTS {
                         let pos = user.data.position.clone();
                         if pos.is_some() {
                             for player in &mut players {
-                                let x = player.1.message_send.send(PlayerCommand::SpawnPlayer {
-                                    position: pos.unwrap().clone(),
-                                    id: (id as u8) as i8,
-                                    name: name.clone(),
-                                }).await;
+                                let x = player
+                                    .1
+                                    .message_send
+                                    .send(PlayerCommand::SpawnPlayer {
+                                        position: pos.unwrap().clone(),
+                                        id: (id as u8) as i8,
+                                        name: name.clone(),
+                                    })
+                                    .await;
                                 if x.is_err() {
                                     println!("Shouldn't fail");
                                 }
@@ -1085,9 +1077,15 @@ impl GMTS {
                         players.remove(&user_id);
                         user_ids.remove(&user_id);
                         for player in &mut players {
-                            player.1.message_send.send(PlayerCommand::DespawnPlayer {
-                                id: (user_id as u8) as i8,
-                            }).await.ok().expect(ERR_SENDING_RESULT);
+                            player
+                                .1
+                                .message_send
+                                .send(PlayerCommand::DespawnPlayer {
+                                    id: (user_id as u8) as i8,
+                                })
+                                .await
+                                .ok()
+                                .expect(ERR_SENDING_RESULT);
                         }
                         res_send.send(()).expect(ERR_SENDING_RESULT);
                     }
@@ -1104,9 +1102,9 @@ impl GMTS {
                             }
                         }
                         res_send.send(()).expect(ERR_SENDING_RESULT);
-                    } 
+                    }
                     PlayersCommand::PassMessageToPermLevel {
-                        mut message,
+                        message,
                         level,
                         res_send,
                     } => {
@@ -1116,7 +1114,7 @@ impl GMTS {
                             }
                         }
                         res_send.send(()).expect(ERR_SENDING_RESULT);
-                    }// ...
+                    } // ...
                     PlayersCommand::SpawnAllPlayers { my_id, res_send } => {
                         let us = players.get(&my_id);
                         if us.is_none() {
@@ -1126,17 +1124,21 @@ impl GMTS {
                             for player in &players {
                                 if player.1.data.position.is_some() {
                                     if player.1.id != us.id {
-                                        us.message_send.send(PlayerCommand::SpawnPlayer {
-                                            position: player.1.data.position.unwrap().clone(),
-                                            id: (player.1.id as u8) as i8,
-                                            name: player.1.name.clone(),
-                                        }).await;
+                                        us.message_send
+                                            .send(PlayerCommand::SpawnPlayer {
+                                                position: player.1.data.position.unwrap().clone(),
+                                                id: (player.1.id as u8) as i8,
+                                                name: player.1.name.clone(),
+                                            })
+                                            .await;
                                     } else {
-                                        us.message_send.send(PlayerCommand::SpawnPlayer {
-                                            position: player.1.data.position.unwrap().clone(),
-                                            id: -1,
-                                            name: player.1.name.clone(),
-                                        }).await;
+                                        us.message_send
+                                            .send(PlayerCommand::SpawnPlayer {
+                                                position: player.1.data.position.unwrap().clone(),
+                                                id: -1,
+                                                name: player.1.name.clone(),
+                                            })
+                                            .await;
                                     }
                                 }
                             }
@@ -1152,15 +1154,27 @@ impl GMTS {
                             res_send.send(us.op).expect(ERR_SENDING_RESULT);
                         }
                     }
+                    PlayersCommand::OnlinePlayers { res_send } => {
+                        let mut players_names = vec![];
+                        for (_, player) in &players {
+                            if player.name == "Server" {
+                                continue;
+                            }
+                            players_names.push(player.name.clone());
+                        }
+                        res_send.send(players_names).expect(ERR_SENDING_RESULT);
+                    }
                     PlayersCommand::OnlinePlayerCount { res_send } => {
                         res_send.send(players.len() - 1).expect(ERR_SENDING_RESULT);
                     }
-                    PlayersCommand::SetPermissionLevel { id, level, res_send } => {
+                    PlayersCommand::SetPermissionLevel {
+                        id,
+                        level,
+                        res_send,
+                    } => {
                         if let Some(us) = players.get_mut(&id) {
                             us.permission_level = level;
-                            res_send
-                                .send(Some(()))
-                                .expect(ERR_SENDING_RESULT);
+                            res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                         } else {
                             res_send.send(None).expect(ERR_SENDING_RESULT);
                         }
@@ -1195,7 +1209,9 @@ impl GMTS {
                             drop(us);
                             for player in &players {
                                 if player.1.id != id {
-                                    if let None = player.1.send_teleport(my_id as i8, &position).await {
+                                    if let None =
+                                        player.1.send_teleport(my_id as i8, &position).await
+                                    {
                                         log::error!(
                                             "Error sending teleport of entity {} to position {:?}",
                                             my_id as i8,
@@ -1233,7 +1249,11 @@ impl GMTS {
                         res_send,
                     } => {
                         if let Some(user) = players.get(&id) {
-                            user.message_send.send(message).await.ok().expect(ERR_SENDING_RESULT);
+                            user.message_send
+                                .send(message)
+                                .await
+                                .ok()
+                                .expect(ERR_SENDING_RESULT);
                             res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                         } else {
                             res_send.send(None).expect(ERR_SENDING_RESULT);
@@ -1250,7 +1270,8 @@ impl GMTS {
                                 let user = players.get(&id).unwrap();
                                 user.message_send
                                     .send(PlayerCommand::Disconnect { reason })
-                                    .await.ok()
+                                    .await
+                                    .ok()
                                     .expect("Shouldn't fail");
                                 f = true;
                                 break;
@@ -1288,7 +1309,11 @@ impl GMTS {
                         for (id, user) in &user_ids {
                             if user == &username {
                                 let user = players.get(&id).unwrap();
-                                user.message_send.send(message).await.ok().expect("Shouldn't fail");
+                                user.message_send
+                                    .send(message)
+                                    .await
+                                    .ok()
+                                    .expect("Shouldn't fail");
                                 f = true;
                                 break;
                             }
@@ -1310,20 +1335,27 @@ impl GMTS {
             for i in 0..127 {
                 ids[i] = i;
             }
-            let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
-            for i in 0..127 {
-                ids.swap(rng.gen_range(0, 127), rng.gen_range(0, 127));
-            }
-            drop(rng);
             loop {
                 match recv.recv().await.unwrap() {
                     TempCrntIdCommand::FetchFreeID { res_send } => {
+                        let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
+                        let len = ids.len();
+                        for _ in 0..len {
+                            ids.swap(rng.gen_range(0, len), rng.gen_range(0, len));
+                        }
+                        drop(rng);
                         res_send
                             .send(ids.pop().unwrap() as u32)
                             .expect("Shouldn't fail");
                     } // ...
                     TempCrntIdCommand::ReturnFreeID { id, res_send } => {
                         ids.push(id as usize);
+                        let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
+                        let len = ids.len();
+                        for _ in 0..len {
+                            ids.swap(rng.gen_range(0, len), rng.gen_range(0, len));
+                        }
+                        drop(rng);
                         res_send.send(()).expect("Shouldn't fail");
                     }
                 }
@@ -1342,25 +1374,41 @@ impl GMTS {
                         res_send,
                     } => {
                         command.remove(0);
-                        let sender_name = cmd_gmts.get_username(executor_id).await.expect("Shouldn't fail! Bug happened!");
+                        let sender_name = cmd_gmts
+                            .get_username(executor_id)
+                            .await
+                            .expect("Shouldn't fail! Bug happened!");
                         log::info!(r#"{} executed server command "/{}""#, sender_name, command);
                         let command = command
                             .split(" ")
                             .map(|s| s.to_string())
                             .collect::<Vec<String>>();
                         if let Some(c) = commands.get(&command[0]) {
-                            let x = (c.closure)(cmd_gmts.clone(), command[1..].to_vec(), executor_id).await;
+                            let x =
+                                (c.closure)(cmd_gmts.clone(), command[1..].to_vec(), executor_id)
+                                    .await;
                             match x {
                                 0 => (),
                                 1 => {
                                     if let Some(data) = commands_list.get(&command[0]) {
                                         cmd_gmts
-                                        .chat_to_id(&format!("&cInvalid syntax. Syntax: /{} {}", &command[0], data.args), -1, executor_id)
-                                        .await;
+                                            .chat_to_id(
+                                                &format!(
+                                                    "&cInvalid syntax. Syntax: /{} {}",
+                                                    &command[0], data.args
+                                                ),
+                                                -1,
+                                                executor_id,
+                                            )
+                                            .await;
                                     } else {
                                         cmd_gmts
-                                        .chat_to_id(&format!("&cInvalid syntax."), -1, executor_id)
-                                        .await;
+                                            .chat_to_id(
+                                                &format!("&cInvalid syntax."),
+                                                -1,
+                                                executor_id,
+                                            )
+                                            .await;
                                     }
                                 }
                                 2 => {
@@ -1405,9 +1453,26 @@ impl GMTS {
             ondisconnect_hooks: Arc::new(pre_gmts.ondisconnect_hooks),
         }
     }
+    pub async fn get_permission_level(&self, id: i8) -> Option<usize> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetPermissionLevel {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     //    pub extensions: HashMap<String, CPEExtensionData>,
     pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
-        self.message_to_id(PlayerCommand::PlayerTeleport { position: position.clone(), id: -1 }, id).await?;
+        self.message_to_id(
+            PlayerCommand::PlayerTeleport {
+                position: position.clone(),
+                id: -1,
+            },
+            id,
+        )
+        .await?;
         self.send_position_update(id, position).await;
         Some(())
     }
@@ -1415,13 +1480,12 @@ impl GMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
     }
     pub async fn chat_broadcast(&self, message: &str, id: i8) -> Option<()> {
-        log::info!("[CHAT]: {}", message);
+        log::info!("[CHAT]: {}", crate::strip_mc_colorcodes(message));
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -1429,7 +1493,6 @@ impl GMTS {
         };
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1440,48 +1503,71 @@ impl GMTS {
     pub async fn get_extensions(&self) -> &HashMap<String, CPEExtensionData> {
         &self.extensions
     }
-    pub async fn get_packetrecv_hooks(&self) -> Arc<HashMap<u8, Box<
-        dyn Fn(
-            Arc<GMTS>,
-            Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
+    pub async fn get_packetrecv_hooks(
+        &self,
+    ) -> Arc<
+        HashMap<
             u8,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>> {
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
+                        u8,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    > {
         self.packet_recv_hooks.clone()
     }
-    pub async fn get_ondisconnect_hooks(&self) -> Arc<Vec<Box<
-        dyn Fn(
-            Arc<GMTS>,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>> {
+    pub async fn get_ondisconnect_hooks(
+        &self,
+    ) -> Arc<
+        Vec<
+            Box<
+                dyn Fn(Arc<GMTS>, i8) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    > {
         self.ondisconnect_hooks.clone()
     }
-    pub async fn get_onconnect_hooks(&self) -> Arc<Vec<Box<
-        dyn Fn(
-            Arc<GMTS>,
-            Arc<Mutex<tokio::net::TcpStream>>,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>> {
+    pub async fn get_onconnect_hooks(
+        &self,
+    ) -> Arc<
+        Vec<
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::TcpStream>>,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    > {
         self.onconnect_hooks.clone()
     }
-    pub async fn get_earlyonconnect_hooks(&self) -> Arc<Vec<Box<
-        dyn Fn(
-            Arc<GMTS>,
-            Arc<Mutex<tokio::net::TcpStream>>,
-            i8,
-            ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
-            + Send
-            + Sync,
-    >>> {
+    pub async fn get_earlyonconnect_hooks(
+        &self,
+    ) -> Arc<
+        Vec<
+            Box<
+                dyn Fn(
+                        Arc<GMTS>,
+                        Arc<Mutex<tokio::net::TcpStream>>,
+                        Arc<String>,
+                        i8,
+                    ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    > {
         self.earlyonconnect_hooks.clone()
     }
     pub async fn get_value(&self, key: &str) -> Option<GMTSElement> {
@@ -1491,7 +1577,6 @@ impl GMTS {
                 key: key.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1502,7 +1587,6 @@ impl GMTS {
                 key: key.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1514,7 +1598,6 @@ impl GMTS {
                 value,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1526,38 +1609,34 @@ impl GMTS {
                 value,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn set_spawnpos(&self, position: PlayerPosition) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
-            .send(WorldCommand::SetSpawnPosition {
-                res_send,
-                position,
-            })
-            .await
+            .send(WorldCommand::SetSpawnPosition { res_send, position })
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn get_spawnpos(&self) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
-            .send(WorldCommand::GetSpawnPosition {
-                res_send,
-            })
-            .await
+            .send(WorldCommand::GetSpawnPosition { res_send })
             .ok()?;
         res_recv.await.ok()?
+    }
+    pub async fn player_list(&self) -> Option<Vec<String>> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::OnlinePlayers { res_send })
+            .ok()?;
+        res_recv.await.ok()
     }
     pub async fn player_count(&self) -> Option<usize> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
-            .send(PlayersCommand::OnlinePlayerCount {
-                res_send,
-            })
-            .await
+            .send(PlayersCommand::OnlinePlayerCount { res_send })
             .ok()?;
         res_recv.await.ok()
     }
@@ -1569,7 +1648,6 @@ impl GMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1583,7 +1661,6 @@ impl GMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1595,12 +1672,11 @@ impl GMTS {
                 pos: block,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn chat_to_permlevel(&self, message: &str, id: i8, level: usize) -> Option<()> {
-        log::info!("[CHAT to perm level >= {}]: {}", level, message);
+        log::info!("[CHAT to perm level >= {}]: {}", level, crate::strip_mc_colorcodes(message));
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
@@ -1612,7 +1688,6 @@ impl GMTS {
                 res_send,
                 level,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1629,7 +1704,6 @@ impl GMTS {
                 id: target_id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1651,7 +1725,6 @@ impl GMTS {
                 username: target_username,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?;
         Some(())
@@ -1663,7 +1736,6 @@ impl GMTS {
                 user_id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -1674,7 +1746,6 @@ impl GMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -1682,15 +1753,21 @@ impl GMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.tempcrntid_send
             .send(TempCrntIdCommand::FetchFreeID { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
-    pub async fn pass_message_to_permlevel(&self, message: PlayerCommand, level: usize) -> Option<()> {
+    pub async fn pass_message_to_permlevel(
+        &self,
+        message: PlayerCommand,
+        level: usize,
+    ) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
-            .send(PlayersCommand::PassMessageToPermLevel { message, res_send, level })
-            .await
+            .send(PlayersCommand::PassMessageToPermLevel {
+                message,
+                res_send,
+                level,
+            })
             .ok()?;
         res_recv.await.ok()
     }
@@ -1698,7 +1775,6 @@ impl GMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::PassMessageToAll { message, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -1709,7 +1785,6 @@ impl GMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1720,30 +1795,30 @@ impl GMTS {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn send_position_update(&self, id: i8, position: PlayerPosition) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
-        self
-            .players_send
+        self.players_send
             .send(PlayersCommand::UpdatePosition {
                 my_id: id as u32,
                 position,
                 res_send,
             })
-            .await.ok()?;
+            .ok()?;
         res_recv.await.ok()?
     }
-    pub async fn get_supported_extensions(&self, id: i8) -> Option<HashMap<String, CPEExtensionData>> {
+    pub async fn get_supported_extensions(
+        &self,
+        id: i8,
+    ) -> Option<HashMap<String, CPEExtensionData>> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
             .send(PlayersCommand::GetSupportedExtensions {
                 id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1756,14 +1831,13 @@ impl GMTS {
                 players_send: self.players_send.clone(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn stop_server(&self) -> Option<()> {
         let message = PlayerCommand::Disconnect {
             reason: "Server closed".to_string(),
-          };
+        };
         self.pass_message_to_all(message).await?;
         log::info!("Saving world");
         self.save_world().await?;
@@ -1773,7 +1847,6 @@ impl GMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::SaveWorld { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1781,7 +1854,6 @@ impl GMTS {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::GetWorld { res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -1793,16 +1865,13 @@ impl GMTS {
                 reason: reason.to_string(),
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
     pub async fn register_user(&self, user: Player) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
-        let pos = user.data.position.clone();
         self.players_send
             .send(PlayersCommand::NewUser { user, res_send })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
@@ -1813,19 +1882,17 @@ impl GMTS {
                 my_id: id as u32,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()
     }
     pub async fn execute_command(&self, id: i8, command: String) -> Option<()> {
-    let (res_send, res_recv) = oneshot::channel();
+        let (res_send, res_recv) = oneshot::channel();
         self.commands_send
             .send(CommandsCommand::SendCommand {
                 executor_id: id,
                 command,
                 res_send,
             })
-            .await
             .ok()?;
         res_recv.await.ok()?
     }
@@ -1883,7 +1950,7 @@ pub enum PlayerCommand {
     },
     RawPacket {
         bytes: Vec<u8>,
-    }
+    },
 }
 pub struct ExtEntry {
     extname: String,
@@ -1897,7 +1964,7 @@ pub enum WorldCommand {
     },
     SetBlockP {
         block: Block,
-        players_send: mpsc::Sender<PlayersCommand>,
+        players_send: mpsc::UnboundedSender<PlayersCommand>,
         sender_id: u32,
         res_send: oneshot::Sender<Option<()>>,
     },
@@ -1916,7 +1983,11 @@ pub enum WorldCommand {
     },
 }
 pub enum CommandsCommand {
-    SendCommand { command: String, executor_id: i8, res_send: oneshot::Sender<Option<()>> },
+    SendCommand {
+        command: String,
+        executor_id: i8,
+        res_send: oneshot::Sender<Option<()>>,
+    },
 }
 pub enum StorageCommand {
     GetValue {
@@ -1979,6 +2050,9 @@ pub enum PlayersCommand {
     },
     OnlinePlayerCount {
         res_send: oneshot::Sender<usize>,
+    },
+    OnlinePlayers {
+        res_send: oneshot::Sender<Vec<String>>,
     },
     GetID {
         username: String,

@@ -1,4 +1,4 @@
-use super::{game::*, Block, BlockPosition, PlayerPosition};
+use super::{Block, BlockPosition, PlayerPosition};
 // common:               p_ver           name             string        isop, client just says theyre not op
 // it's unused, doesn't need to be there
 // anything marked as "unused" is a reverse engineering byproduct, it should more accurately be:

@@ -29,6 +29,8 @@ struct SerializeWhitelist {
     whitelisted: Vec<String>,
 }
 const DEFAULT_CONFIG: &str = r#"# Default config
+authenticate_usernames = true
+show_on_server_list = true
 spawn_protection_radius = 32
 whitelist_enabled = false
 world_file = "world.cw"
@@ -97,8 +99,16 @@ pub fn add_op(username: &str) {
         log::error!("Invalid ops file!");
         std::process::exit(1);
     };
-    config.ops.push(username.to_string());
-    std::fs::write("ops.toml", toml::to_string(&config).unwrap()).unwrap();
+    let mut doit = true;
+    for name in &config.ops {
+        if name == username {
+            doit = false;
+        }
+    }
+    if doit {
+        config.ops.push(username.to_string());
+        std::fs::write("ops.toml", toml::to_string(&config).unwrap()).unwrap();
+    }
 }
 pub fn remove_op(username: &str) {
     let file = if let Ok(f) = std::fs::read_to_string("ops.toml") {

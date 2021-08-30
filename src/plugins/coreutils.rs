@@ -13,10 +13,79 @@ Command plan:
 /tppos - tp user to position
 /say - say message
 */
+fn random_server_salt() -> String {
+    use rand::RngCore;
+    let mut bytes = vec![0; 15];
+    let mut rng = rand::rngs::OsRng::new().unwrap();
+    rng.fill_bytes(&mut bytes);
+    return base_62::encode(&bytes);
+}
 impl crate::game::Plugin for CoreUtils {
     fn initialize(pre_gmts: &mut PreGMTS) {
         pre_gmts.register_oninitialize(Box::new(move |gmts | {
             Box::pin(async move {
+                gmts.new_value(
+                    "Coreutils_HeartbeatSalt",
+                    GMTSElement {
+                        val: Arc::new(Box::new(random_server_salt())),
+                    },
+                )
+                .await;
+                if CONFIGURATION.show_on_server_list {
+                    let hb_gmts = gmts.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            use std::io::{Read, Write};
+                            let port = CONFIGURATION.listen_address.split(":").collect::<Vec<&str>>()[1];
+                            let online_players = if let Some(l) = hb_gmts.player_count().await {
+                                l
+                            } else {
+                                continue;
+                            };
+                            let x = if let Some(l) =
+                            hb_gmts.get_value("Coreutils_HeartbeatSalt").await
+                        {
+                            l
+                        } else {
+                            log::error!("Heartbeat error!");
+                            continue;
+                        };
+                        let salt = if let Some(l) =
+                        x.val.downcast_ref::<String>()
+                    {
+                        l
+                    } else {
+                        log::error!("Heartbeat error!");
+                        continue;
+                    };
+                            let public = match CONFIGURATION.public {
+                                true => "True",
+                                false => "False",
+                            };
+                            let request = format!("GET /heartbeat.jsp?port={port}&max={maxplayers}&name={servername}&public={public}&version=7&salt={salt}&users={online}&software={software_ver} HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt, port = port, maxplayers = CONFIGURATION.max_players, servername = urlencoding::encode(&CONFIGURATION.server_name), online = online_players, public = public, software_ver = urlencoding::encode(&format!("BetterThanMinecraft v{}.", crate::VERSION)));
+                            extern crate native_tls;
+                            use native_tls::TlsConnector;
+                            let connector = TlsConnector::new().unwrap();
+                            let tlsstream = std::net::TcpStream::connect("classicube.net:443").unwrap();
+                            let mut tlsstream = connector.connect("classicube.net", tlsstream).unwrap();
+                            tlsstream.write_all(request.as_bytes()).unwrap();
+                            let mut buf = vec![];
+                            tlsstream.read_to_end(&mut buf).unwrap();
+                            let buf = String::from_utf8_lossy(&buf).to_string();
+                            let buf2 = buf.clone();
+                            let buf2 = buf2.split(" ").collect::<Vec<&str>>();
+                            if buf2[1] != "200" {
+                                log::error!("Heartbeat error! Got response code {}. Trying again in 5 seconds...", buf2[1]);
+                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                continue;
+                            }
+                            let buf = buf.split("\r\n").collect::<Vec<&str>>();
+                            let url = buf[buf.len() - 4];
+                            log::info!("Server URL: [{}]", url);
+                            std::thread::sleep(std::time::Duration::from_secs(45));
+                        }
+                    });
+                }
                 let pos = gmts.get_spawnpos().await?;
                 gmts.new_value(
                     "Coreutils_SpawnPosition",
@@ -35,12 +104,43 @@ impl crate::game::Plugin for CoreUtils {
                 Some(())
             })
         }));
-        pre_gmts.register_early_onconnect_hook(Box::new(|gmts, stream, id| {
+        pre_gmts.register_early_onconnect_hook(Box::new(|gmts, stream, v_token, id| {
             Box::pin(async move {
                 use tokio::io::AsyncWriteExt;
                 let username = gmts.get_username(id).await?;
-                let banlist = settings::get_banlist();
                 let mut stream = stream.lock().await;
+                if CONFIGURATION.authenticate_usernames {
+                    let x = if let Some(l) = gmts.get_value("Coreutils_HeartbeatSalt").await {
+                        l
+                    } else {
+                        log::error!("Verify name error!");
+                        return None;
+                    };
+                    let salt = if let Some(l) = x.val.downcast_ref::<String>() {
+                        l
+                    } else {
+                        log::error!("Verify name error!");
+                        return None;
+                    };
+                    use md5::{Md5, Digest};
+                    let mut hasher = Md5::new();
+                    hasher.update(salt);
+                    hasher.update(username.clone());
+                    let hash = hasher.finalize().to_vec();
+                    let hash = hex::encode(&hash);
+                    if *v_token != hash {
+                        log::info!("Bad authentication! Got {}, expected {}!", v_token, hash);
+                        let packet = crate::classic::Packet::Disconnect {
+                            reason: "Could not authenticate.".to_string(),
+                        };
+                        stream
+                            .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+                            .await
+                            .ok()?;
+                        return None;
+                    }
+                }
+                let banlist = settings::get_banlist();
                 for ban in banlist {
                     if ban.username == username {
                         let packet = crate::classic::Packet::Disconnect {
@@ -61,7 +161,7 @@ impl crate::game::Plugin for CoreUtils {
             "list".to_string(),
             "",
             "Get player list",
-            Box::new(move |gmts, args, sender| {
+            Box::new(move |gmts, _, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -70,7 +170,35 @@ impl crate::game::Plugin for CoreUtils {
                             } else {
                                 return 3;
                             };
-                            gmts.chat_to_id(&format!("&7There are &c{}&7 out of a maximum of &c{}&7 players online.", online_players, CONFIGURATION.max_players), -1, sender).await;
+                            gmts.chat_to_id(
+                                &format!(
+                                    "&7There are &c{}&7 out of a maximum of &c{}&7 players online.",
+                                    online_players, CONFIGURATION.max_players
+                                ),
+                                -1,
+                                sender,
+                            )
+                            .await;
+                            let mut player_list = if let Some(c) = gmts.player_list().await {
+                                c
+                            } else {
+                                return 3;
+                            };
+                            if let Some(last) = player_list.last() {
+                                let last = last.clone();
+                                player_list.remove(0);
+                                let mut string = "&7List: ".to_string();
+                                for name in &player_list {
+                                    string.push_str(&format!("&c{}&7, ", name));
+                                }
+                                string.push_str(&format!("&c{}&7.", last));
+                                gmts.chat_to_id(
+                                    &string,
+                                    -1,
+                                    sender,
+                                )
+                                .await;
+                            }
                         }
                     } else {
                         return 3;
@@ -83,7 +211,7 @@ impl crate::game::Plugin for CoreUtils {
             "help".to_string(),
             "",
             "Get command help",
-            Box::new(move |gmts, args, sender| {
+            Box::new(move |gmts, _, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -91,13 +219,13 @@ impl crate::game::Plugin for CoreUtils {
                             gmts.chat_to_id("&fHelp:", -1, sender).await;
                             let mut to_sort_alphabetical = std::collections::BTreeMap::new();
                             for (name, data) in all_cmds {
-                                to_sort_alphabetical.insert(name.clone(), format!("&c/{} {} &f- &7{}", name, data.args, data.desc));
+                                to_sort_alphabetical.insert(
+                                    name.clone(),
+                                    format!("&c/{} {} &f- &7{}", name, data.args, data.desc),
+                                );
                             }
                             for (_, message) in to_sort_alphabetical {
-                                let message =
-                                    message
-                                        .as_bytes()
-                                        .to_vec();
+                                let message = message.as_bytes().to_vec();
                                 let message = message.chunks(60).collect::<Vec<&[u8]>>();
                                 for message in message {
                                     gmts.chat_to_id(
@@ -123,7 +251,7 @@ impl crate::game::Plugin for CoreUtils {
             "setworldspawn".to_string(),
             "",
             "Set the world spawnpoint to your current position.",
-            Box::new(move |gmts, args, sender| {
+            Box::new(move |gmts, _, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -174,9 +302,71 @@ impl crate::game::Plugin for CoreUtils {
             }),
         );
         pre_gmts.register_command(
+            "tppos".to_string(),
+            "(player) (x) (y) (z)",
+            "Teleport player to coordinates.",
+            Box::new(move |gmts, args, sender| {
+                Box::pin(async move {
+                    if let Some(p) = gmts.get_permission_level(sender).await {
+                        if p >= 4 {
+                            let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                n
+                            } else {
+                                return 1;
+                            };
+                            if args.len() < 4 {
+                                return 1;
+                            }
+                            let id_a = if let Some(i) = gmts.get_id(args[0].to_string()).await {
+                                i
+                            } else {
+                                return 1;
+                            };
+                            let x = if let Some(x) = i16::from_str_radix(&args[1], 10).ok() {
+                                x
+                            } else {
+                                return 1;
+                            };
+                            let y = if let Some(y) = i16::from_str_radix(&args[2], 10).ok() {
+                                y
+                            } else {
+                                return 1;
+                            };
+                            let z = if let Some(z) = i16::from_str_radix(&args[3], 10).ok() {
+                                z
+                            } else {
+                                return 1;
+                            };
+                            if let None = gmts
+                                .tp_id_pos(
+                                    id_a,
+                                    PlayerPosition::from_pos(x as u16, y as u16, z as u16),
+                                )
+                                .await
+                            {
+                                return 3;
+                            }
+                            gmts.chat_to_permlevel(
+                                &format!(
+                                    "&d[{}: Teleporting {} to {}, {}, {}]",
+                                    our_name, args[0], x, y, z
+                                ),
+                                -1,
+                                4,
+                            )
+                            .await;
+                        }
+                    } else {
+                        return 3;
+                    };
+                    0
+                })
+            }),
+        );
+        pre_gmts.register_command(
             "tp".to_string(),
-            "(persona) (personb)",
-            "teleport person a to person b.",
+            "(player 1) (player 2)",
+            "Teleport player 1 to player 2.",
             Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
@@ -436,17 +626,22 @@ impl crate::game::Plugin for CoreUtils {
                                     if args.len() < 1 {
                                         return 1;
                                     }
-                                    let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                    let our_name = if let Some(n) = gmts.get_username(sender).await
+                                    {
                                         n
                                     } else {
                                         return 3;
                                     };
-                                    let x = if let Some(l) = gmts.get_value("Coreutils_Whitelist").await {
+                                    let x = if let Some(l) =
+                                        gmts.get_value("Coreutils_Whitelist").await
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
-                                    let whitelist = if let Some(l) = x.val.downcast_ref::<(bool, Vec<String>)>() {
+                                    let whitelist = if let Some(l) =
+                                        x.val.downcast_ref::<(bool, Vec<String>)>()
+                                    {
                                         l
                                     } else {
                                         return 3;
@@ -472,7 +667,10 @@ impl crate::game::Plugin for CoreUtils {
                                     )
                                     .await;
                                     gmts.chat_to_permlevel(
-                                        &format!("&d[{}: Adding {} to the whitelist.]", our_name, args[0]),
+                                        &format!(
+                                            "&d[{}: Adding {} to the whitelist.]",
+                                            our_name, args[0]
+                                        ),
                                         -1,
                                         4,
                                     )
@@ -483,25 +681,28 @@ impl crate::game::Plugin for CoreUtils {
                                     if args.len() < 1 {
                                         return 1;
                                     }
-                                    let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                    let our_name = if let Some(n) = gmts.get_username(sender).await
+                                    {
                                         n
                                     } else {
                                         return 3;
                                     };
-                                    let x = if let Some(l) = gmts.get_value("Coreutils_Whitelist").await {
+                                    let x = if let Some(l) =
+                                        gmts.get_value("Coreutils_Whitelist").await
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
-                                    let whitelist = if let Some(l) = x.val.downcast_ref::<(bool, Vec<String>)>() {
+                                    let whitelist = if let Some(l) =
+                                        x.val.downcast_ref::<(bool, Vec<String>)>()
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
                                     let (whitelist_enabled, mut whitelist) = whitelist.clone();
-                                    whitelist.retain(|name| {
-                                        &args[0] != name
-                                    });
+                                    whitelist.retain(|name| &args[0] != name);
                                     gmts.set_value(
                                         "Coreutils_Whitelist",
                                         GMTSElement {
@@ -510,7 +711,10 @@ impl crate::game::Plugin for CoreUtils {
                                     )
                                     .await;
                                     gmts.chat_to_permlevel(
-                                        &format!("&d[{}: Removing {} from the whitelist.]", our_name, args[0]),
+                                        &format!(
+                                            "&d[{}: Removing {} from the whitelist.]",
+                                            our_name, args[0]
+                                        ),
                                         -1,
                                         4,
                                     )
@@ -518,12 +722,16 @@ impl crate::game::Plugin for CoreUtils {
                                     settings::remove_whitelist(&args[0]);
                                 }
                                 "list" => {
-                                    let x = if let Some(l) = gmts.get_value("Coreutils_Whitelist").await {
+                                    let x = if let Some(l) =
+                                        gmts.get_value("Coreutils_Whitelist").await
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
-                                    let whitelist = if let Some(l) = x.val.downcast_ref::<(bool, Vec<String>)>() {
+                                    let whitelist = if let Some(l) =
+                                        x.val.downcast_ref::<(bool, Vec<String>)>()
+                                    {
                                         l
                                     } else {
                                         return 3;
@@ -535,33 +743,29 @@ impl crate::game::Plugin for CoreUtils {
                                         sender,
                                     )
                                     .await;
-                                    gmts.chat_to_id(
-                                        "Whitelisted users:",
-                                        -1,
-                                        sender,
-                                    )
-                                    .await;
+                                    gmts.chat_to_id("Whitelisted users:", -1, sender).await;
                                     for name in whitelist {
-                                        gmts.chat_to_id(
-                                            &format!("&7-- {}", name),
-                                            -1,
-                                            sender,
-                                        )
-                                        .await;
+                                        gmts.chat_to_id(&format!("&7-- {}", name), -1, sender)
+                                            .await;
                                     }
                                 }
                                 "on" => {
-                                    let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                    let our_name = if let Some(n) = gmts.get_username(sender).await
+                                    {
                                         n
                                     } else {
                                         return 3;
                                     };
-                                    let x = if let Some(l) = gmts.get_value("Coreutils_Whitelist").await {
+                                    let x = if let Some(l) =
+                                        gmts.get_value("Coreutils_Whitelist").await
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
-                                    let whitelist = if let Some(l) = x.val.downcast_ref::<(bool, Vec<String>)>() {
+                                    let whitelist = if let Some(l) =
+                                        x.val.downcast_ref::<(bool, Vec<String>)>()
+                                    {
                                         l
                                     } else {
                                         return 3;
@@ -592,17 +796,22 @@ impl crate::game::Plugin for CoreUtils {
                                     }
                                 }
                                 "off" => {
-                                    let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                    let our_name = if let Some(n) = gmts.get_username(sender).await
+                                    {
                                         n
                                     } else {
                                         return 3;
                                     };
-                                    let x = if let Some(l) = gmts.get_value("Coreutils_Whitelist").await {
+                                    let x = if let Some(l) =
+                                        gmts.get_value("Coreutils_Whitelist").await
+                                    {
                                         l
                                     } else {
                                         return 3;
                                     };
-                                    let whitelist = if let Some(l) = x.val.downcast_ref::<(bool, Vec<String>)>() {
+                                    let whitelist = if let Some(l) =
+                                        x.val.downcast_ref::<(bool, Vec<String>)>()
+                                    {
                                         l
                                     } else {
                                         return 3;
@@ -819,10 +1028,22 @@ impl crate::game::Plugin for CoreUtils {
                             if args.len() < 1 {
                                 return 1;
                             }
+                            let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                n
+                            } else {
+                                return 3;
+                            };
                             let their_id = match gmts.get_id(args[0].clone()).await {
                                 Some(x) => x,
                                 None => {
-                                    return 3;
+                                    gmts.chat_to_permlevel(
+                                        &format!("&d[{}: Opping {}]", our_name, args[0]),
+                                        -1,
+                                        4,
+                                    )
+                                    .await;
+                                    settings::add_op(&args[0]);
+                                    return 0;
                                 }
                             };
                             let their_p_level = match gmts.get_permission_level(their_id).await {
@@ -839,11 +1060,6 @@ impl crate::game::Plugin for CoreUtils {
                                 )
                                 .await;
                             } else {
-                                let our_name = if let Some(n) = gmts.get_username(sender).await {
-                                    n
-                                } else {
-                                    return 3;
-                                };
                                 gmts.set_permission_level(their_id, 4).await;
                                 gmts.message_to_id(
                                     PlayerCommand::RawPacket {
@@ -882,10 +1098,22 @@ impl crate::game::Plugin for CoreUtils {
                             if args.len() < 1 {
                                 return 1;
                             }
+                            let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                n
+                            } else {
+                                return 3;
+                            };
                             let their_id = match gmts.get_id(args[0].clone()).await {
                                 Some(x) => x,
                                 None => {
-                                    return 3;
+                                    gmts.chat_to_permlevel(
+                                        &format!("&d[{}: De-opping {}]", our_name, args[0]),
+                                        -1,
+                                        4,
+                                    )
+                                    .await;
+                                    settings::remove_op(&args[0]);
+                                    return 0;
                                 }
                             };
                             let their_p_level = match gmts.get_permission_level(their_id).await {
@@ -914,11 +1142,6 @@ impl crate::game::Plugin for CoreUtils {
                                 if let None = gmts.set_permission_level(their_id, 1).await {
                                     return 3;
                                 }
-                                let our_name = if let Some(n) = gmts.get_username(sender).await {
-                                    n
-                                } else {
-                                    return 3;
-                                };
                                 gmts.message_to_id(
                                     PlayerCommand::RawPacket {
                                         bytes: vec![0x0f, 0x64],
@@ -946,7 +1169,7 @@ impl crate::game::Plugin for CoreUtils {
                 })
             }),
         );
-        pre_gmts.register_setblock_hook(Box::new(|gmts , block, sender_id| {
+        pre_gmts.register_setblock_hook(Box::new(|gmts, block, sender_id| {
             Box::pin(async move {
                 if let Some(p) = gmts.get_permission_level(sender_id as i8).await {
                     if p < 4 {
