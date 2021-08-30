@@ -154,6 +154,7 @@ if CONFIGURATION.public {}
         log::error!("Player join error!");
       }
     });
+    log::info!("balls");
   }
 }
 async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>) -> Option<()> {
