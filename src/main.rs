@@ -49,6 +49,7 @@ use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
 use std::io::Write;
+use std::sync::Arc;
 pub mod game;
 pub mod settings;
 use game::*;
@@ -81,7 +82,7 @@ if CONFIGURATION.public {}
   settings::get_banlist();
   log::info!("Starting BetterThanMinecraft v{}.", VERSION);
   use tokio::runtime::Runtime;
-  plugins::coreutils::CoreUtils::initialize(&mut pregmts);
+  //plugins::coreutils::CoreUtils::initialize(&mut pregmts);
   //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
@@ -134,32 +135,29 @@ if CONFIGURATION.public {}
 
   let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
   log::info!("Server listening on {}", CONFIGURATION.listen_address);
-  let gmts2 = gmts.clone();
-  tokio::spawn(async move {
-    loop {
-      let possible = listener.accept().await;
-      if possible.is_err() {
-        continue;
-      }
-      let (stream, _) = possible.unwrap();
-      let gmts = gmts2.clone();
-      tokio::spawn(async move {
-        if let None = new_incoming_connection_handler(stream, &gmts).await {
-          //log::error!("Player join error!");
-        }
-      });
+  let gmts = Arc::new(gmts);
+  loop {
+    log::info!("A");
+    let possible = listener.accept().await;
+    log::info!("B");
+    if possible.is_err() {
+      log::info!("C");
+      continue;
     }
-  });
-  loop {}
+    let (stream, _) = possible.unwrap();
+    log::info!("D");
+    let gmts = gmts.clone();
+    log::info!("E");
+    tokio::task::spawn(async move {
+      log::info!("F");
+      if let None = new_incoming_connection_handler(stream, gmts).await {
+        log::error!("Player join error!");
+      }
+    });
+  }
 }
-async fn mc_con_handler(
-  mut stream: TcpStream,
-  gmts: &GMTS,
-) -> Result<(), Box<dyn std::error::Error>> {
-  
-  return Ok(());
-}
-async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> Option<()> {
+async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>) -> Option<()> {
+  log::info!("hallo!");
   let mut test = Box::pin(&mut stream);
   let spawn_position = gmts.get_spawnpos().await?;
   let packet = ClassicPacketReader::read_packet_reader(&mut test).await.ok()?;
@@ -273,7 +271,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
         log::info!("{} doesn't support CPE.", user_name);
       return None;
     }
-    let x = gmts.get_value("Coreutils_Whitelist").await?;
+/*     let x = gmts.get_value("Coreutils_Whitelist").await?;
     let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
     let (whitelist_enabled, whitelist) = whitelist.clone();
     //let whitelist = settings::get_whitelist();
@@ -292,7 +290,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
         .await.ok()?;
         log::info!("{} is not whitelisted.", user_name);
       return None;
-    }
+    } */
     let player = Player {
       data: data,
       op,
@@ -304,7 +302,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
       supported_extensions
     };
     gmts.register_user(player).await?;
-    if let None = internal_inc_handler(stream, gmts, recv, &user_name.clone(), our_id as u32, p_ver, op, cpe).await {
+    if let None = internal_inc_handler(stream, gmts.clone(), recv, &user_name.clone(), our_id as u32, p_ver, op, cpe).await {
       let hooks = gmts.get_ondisconnect_hooks().await;
       for hook in &*hooks {
         hook(gmts.clone(), our_id as i8).await;
@@ -325,7 +323,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: &GMTS) -> 
   }
   Some(())
 }
-async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
+async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
   let hooks = gmts.get_earlyonconnect_hooks().await;
   let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
   for hook in &*hooks {
@@ -382,7 +380,7 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
   let (mut readhalf, mut writehalf) = stream.into_split();
   let (send_1, mut recv_1) = oneshot::channel::<Option<()>>();
   let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
-  tokio::spawn(async move {
+  tokio::task::spawn(async move {
     let function = || async move {
       if let None = gmts2.spawn_all_players(our_id as i8).await {
         return None;
@@ -494,12 +492,14 @@ async fn internal_inc_handler(stream: TcpStream, gmts: &GMTS, reciever: stdmpsc:
       loop {
         match recv_2.try_recv() {
           Ok(_) => {
+            //log::info!("\n\n\nPacket handler dropping for {}\n\n\n", our_username);
             return Some(());
           }
           _ => {
-
+            //log::info!("Packet handler _ for {}", our_username);
           }
         }
+        //log::info!("Packet handler running for {}", our_username);
         let mut s_p_id = [0; 1];
         let x = readhalf.peek(&mut s_p_id).await.ok();
         if x.is_none() {

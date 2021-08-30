@@ -179,7 +179,7 @@ pub struct GMTS {
     pub onconnect_hooks: Arc<Vec<
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::TcpStream>>,
                     i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -190,7 +190,7 @@ pub struct GMTS {
     pub earlyonconnect_hooks: Arc<Vec<
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::TcpStream>>,
                     i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -202,7 +202,7 @@ pub struct GMTS {
         u8,
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
                     u8,
                     i8,
@@ -213,7 +213,7 @@ pub struct GMTS {
     >>,
     pub ondisconnect_hooks: Arc<Vec<Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             i8,
             ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
             + Send
@@ -696,7 +696,7 @@ pub struct PreGMTS {
     pub onconnect_hooks: Vec<
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::TcpStream>>,
                     i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -707,7 +707,7 @@ pub struct PreGMTS {
     pub earlyonconnect_hooks: Vec<
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::TcpStream>>,
                     i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -719,7 +719,7 @@ pub struct PreGMTS {
         u8,
         Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
                     u8,
                     i8,
@@ -730,7 +730,7 @@ pub struct PreGMTS {
     >,
     pub ondisconnect_hooks: Vec<Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             i8,
             ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
             + Send
@@ -814,7 +814,7 @@ impl PreGMTS {
         &mut self,
         closure: Box<
             dyn Fn(
-                GMTS,
+                Arc<GMTS>,
                 Arc<Mutex<tokio::net::TcpStream>>,
                 i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -828,7 +828,7 @@ impl PreGMTS {
         &mut self,
         closure: Box<
             dyn Fn(
-                GMTS,
+                Arc<GMTS>,
                 i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
                 + Send
@@ -841,7 +841,7 @@ impl PreGMTS {
         &mut self,
         closure: Box<
             dyn Fn(
-                GMTS,
+                Arc<GMTS>,
                 Arc<Mutex<tokio::net::TcpStream>>,
                 i8,
                 ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -856,7 +856,7 @@ impl PreGMTS {
         id: u8,
         closure:             Box<
             dyn Fn(
-                    GMTS,
+                    Arc<GMTS>,
                     Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
                     u8,
                     i8,
@@ -893,8 +893,8 @@ impl GMTS {
         // Initialize Physics Thread
         let (world_send, ph_recv) = mpsc::channel::<WorldCommand>(10000000);
         let (players_send, players_recv) = mpsc::channel::<PlayersCommand>(10000000);
-        let (temp_crnt_id_send, tci_recv) = mpsc::channel::<TempCrntIdCommand>(10);
-        let (storage_send, store_recv) = mpsc::channel::<StorageCommand>(10);
+        let (temp_crnt_id_send, tci_recv) = mpsc::channel::<TempCrntIdCommand>(100000);
+        let (storage_send, store_recv) = mpsc::channel::<StorageCommand>(100000);
         let (commands_send, cmd_recver) = mpsc::channel::<CommandsCommand>(1000000);
         let storage_send_2 = storage_send.clone();
         let mut all_commands = HashMap::new();
@@ -910,7 +910,7 @@ impl GMTS {
         };
         let storage = pre_gmts.values;
         let mut recv = store_recv;
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             let mut storage = storage;
             loop {
                 match recv.recv().await.unwrap() {
@@ -960,7 +960,7 @@ impl GMTS {
         let mut recv = ph_recv;
         let setblock_hooks = pre_gmts.setblock_hooks;
         let cmd_gmts_2 = cmd_gmts.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             //let generator = FlatWorldGenerator::new(64, BlockIds::AIR, BlockIds::SAND, BlockIds::AIR);
             //let mut world = World::new(generator, 128, 128, 128);
             log::info!("Loading world from {}", &super::CONFIGURATION.world_file);
@@ -1057,7 +1057,7 @@ impl GMTS {
         let mut recv = players_recv;
         let pmta_hooks = pre_gmts.pmta_hooks;
         let cmd_gmts_2 = cmd_gmts.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             let mut players: HashMap<u32, Player> = HashMap::new();
             let mut user_ids: HashMap<u32, String> = HashMap::new();
             loop {
@@ -1088,9 +1088,9 @@ impl GMTS {
                         for player in &mut players {
                             player.1.message_send.send(PlayerCommand::DespawnPlayer {
                                 id: (user_id as u8) as i8,
-                            });
+                            }).expect(ERR_SENDING_RESULT);
                         }
-                        res_send.send(());
+                        res_send.send(()).expect(ERR_SENDING_RESULT);
                     }
                     PlayersCommand::PassMessageToAll {
                         mut message,
@@ -1100,9 +1100,9 @@ impl GMTS {
                             message = hook(cmd_gmts_2.clone(), message).await
                         }
                         for player in &mut players {
-                            player.1.message_send.send(message.clone());
+                            player.1.message_send.send(message.clone()).expect(ERR_SENDING_RESULT);
                         }
-                        res_send.send(());
+                        res_send.send(()).expect(ERR_SENDING_RESULT);
                     } 
                     PlayersCommand::PassMessageToPermLevel {
                         mut message,
@@ -1302,7 +1302,7 @@ impl GMTS {
         });
         // Initialize Temp Crnt Id Managing Task
         let mut recv = tci_recv;
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             let mut ids = vec![0; 127];
             for i in 0..127 {
                 ids[i] = i;
@@ -1325,7 +1325,7 @@ impl GMTS {
         let commands = pre_gmts.commands;
         let commands_list = all_commands.clone();
         let cmd_gmts_4 = cmd_gmts.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
                 match recv.recv().await.unwrap() {
                     CommandsCommand::SendCommand {
@@ -1434,7 +1434,7 @@ impl GMTS {
     }
     pub async fn get_packetrecv_hooks(&self) -> Arc<HashMap<u8, Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             Arc<Mutex<tokio::net::tcp::OwnedReadHalf>>,
             u8,
             i8,
@@ -1446,7 +1446,7 @@ impl GMTS {
     }
     pub async fn get_ondisconnect_hooks(&self) -> Arc<Vec<Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             i8,
             ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
             + Send
@@ -1456,7 +1456,7 @@ impl GMTS {
     }
     pub async fn get_onconnect_hooks(&self) -> Arc<Vec<Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             Arc<Mutex<tokio::net::TcpStream>>,
             i8,
             ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
@@ -1467,7 +1467,7 @@ impl GMTS {
     }
     pub async fn get_earlyonconnect_hooks(&self) -> Arc<Vec<Box<
         dyn Fn(
-            GMTS,
+            Arc<GMTS>,
             Arc<Mutex<tokio::net::TcpStream>>,
             i8,
             ) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>
