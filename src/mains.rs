@@ -43,19 +43,10 @@ impl Position {
   pub fn distance_from_squared(&self, other: Position) -> f32 {
     (self.x - other.x).pow(2) + (self.y - other.y).pow(2) + (self.z - other.z).pow(2)
   }
-  // uh put it in a queue for the time being, technically an unbounded broadcast is a queue
-  // anyway go and make assumptions and ill correct em... hopefully
-  // puts a set block packet in a queue to send to other players, to make it easier on us 
-  // wut i have no idea where to start, help pls you 
-  // chose the logic for this one you help me get started
-  // line 157 <-- @Galaxtone
-  //take me to the line of code to start at or around thee, just click and ill follow
   pub fn distance_from_block_squared(&self, other: BlockPosition) -> usize {
     usize doesnt have .sqrt, oh well
     (self.x as usize - other.x).pow(2) + (self.y as usize - other.y).pow + (self.z as usize - other.z).pow(2)
   }
-  // we still don't have a solution to the MagicContainer for storing all the players
-  // no that's where we store all the players in the Game object, just a Vec? Arc<Mutex<Vec<Player>>> ?
   pub fn distance_from(&self, other: Position) -> f32 {
     self.distance_from_squared(other).sqrt()
   }
@@ -86,24 +77,6 @@ impl PlayerTransform {
 fn f32_to_fixed(x: f32) -> i16 {
   return (x * 32).round() as i16
 }
-// players will be able to change their scale with the ScaleExtension
-// and your calculations will need scale to properly raytrace when we implement it
-// so really it should include scale and be: PlayerPositionRotationScale
-// which is short for Transformation or "PlayerTransform"
-// including scale, this is what game engines use.
-
-// exclude scale, transform makes sense
-// and players might be able to scale their size in the near-future
-// and if your doing calculations you'll want scale...
-
-// just leave it whatever, we decide later.
-// let's write some proper code
-
-
-
-
-// yeah, although PlayerPositionRotation isn't too bad
-// it'd be short if you shorthand Pos and Rot like PosRot
 
 pub struct PlayerPosition {
     x: Short,
@@ -198,14 +171,7 @@ async fn incoming_connection_handler(stream: TcpStream) -> Result<(), Box<dyn Er
 
 
 
-you gotta open your mind
-/* ================================================ classic.rs ================================================ */
 pub mod classic {
-  // common:               p_ver           name             string        isop, client just says theyre not op
-  // it's unused, doesn't need to be there
-  // anything marked as "unused" is a reverse engineering byproduct, it should more accurately be:
-  // "unchanging" as that's what they observed to give it the name of "unused"
-  // and an unchanged permission is valid.
   pub enum Packet {
     PlayerIdentificaction {p_ver: u8, user_name: String, v_key: String, unchanged: u8 /*technically, not going to leave it in, just for a point*/},
     ServerIdentificaction {p_ver: u8, server_name: String, motd: String, is_op: u8},
@@ -214,57 +180,6 @@ pub mod classic {
     LevelFinalize { width: usize, height: usize, length: usize},
   }
 }
-
-// I reserve the right to change the signedness of a value when negatives have no purpose, and the name of packets to something of equivalent meaning
-// because of the reasons stated in reserve_f_u_exo.txt
-/*
-+------------+------+--------+-------
-|    Type    | Size |  Rust  | Note
-+------------+------+--------+-------
-| Byte       | 1    |  u8    | Used when needed, in java values are stored in shorts, to avoid signedness.
-| SByte      | 1    |  i8    | Single byte signed integer (-128 to 127) == i8
-| Short      | 2    |  u16   | Unsigned integer, network order (BE)
-| SShort     | 2    |  i16   | Signed integer, network order (BE)
-| String     | 64   |  &str  | US-ASCII/ISO646-US encoded string padded with spaces (0x20) == String
-| Byte array | 1024 |  &[u8] | Binary data padded with null bytes (0x00) == &[u8]
-*/
-you forgot about it it's down there scroll down
-
-
-// who classicoomer
-// ======= Old packet enums =======
-/*
-/// All client packets
-pub enum ClassicPacketClient {
-  PlayerIdentification {protocol_ver: u8, username: String, verification_key: String},
-  PositionAndOrientation {player_id: u8, position: PositionYP},
-  SetBlock {coords: Position, mode: u8, block_type: u8},
-  Message {message: String},
-  Other,
-}
-
-
-/// All server packets
-#[derive(Clone)]
-pub enum ClassicPacketServer {
-  ServerIdentification {protocol_ver: u8, servername: String, motd: String},
-  Ping,
-  LevelInitialize, // TODO the below packet should be abstracted into a single property for data Vec with a function like read_fixed_bytes that discards padding bytes if length < 1024
-  LevelDataChunk { chunk_length: i16, chunk_data: Box<[u8]>, percent_complete: u8},
-  LevelFinalize { width: usize, height: usize, length: usize}, //FIXME
-  // skipping a few
-  SpawnPlayer { player_id: i8, name: String, position: PositionYP},
-  // remember, teleports are relative to eye level, add +51 directly to the final number to be relative to FEET, like normal minecraft. Don't confuse this as going from feet to head!
-  PlayerTeleport { player_id: i8, position: PositionYP},
-  SetBlock {block: Block},
-  DespawnPlayer { player_id: i8 },
-  Message { player_id: i8, message: String},
-  DisconnectPlayer { reason: String },
-}
-*/
-  
-  // put seiralize below here
-  // copy and pasted the old one LOL it works fine
   pub struct ClassicPacketUtils {
 
 }
@@ -365,41 +280,4 @@ impl ClassicPacketBuilder {
   }
 }
 
-}
-
-/* ============================================================================== ALERT: GALAXTONE IS GAY ==============================================================================
-/* Section [Bumboy] Start */
-// have names in it, for easy ctrl+F
-/* Section [Bumboy] End */
-
-// hey can we keep things in one file and split it up afterwards
-// i guess, might be ugly for now
-
-// game struct will house global variables and elements that all threads can get at
-
-// "commands" to the socket might as well be the packets themselves
-// it's implicit that it writes what it receives and mspc<T>, T takes ANYTHING not just enums
-// I'll add an enum for packets, and leave Bytes to the serialization department
-
-// Vec(s)? or ClassicPacketServer(s)
-pub fn main() {
-
-  let (my_sender, my_receiver) = oneshot::new();
-  player_manager_sender.send(GetCoords { player_id: 5, sender: my_sender })
-
-  pub enum ExampleCommand {
-    use tokio::sync::oneshot::Sender;
-    GetCoords {
-      player_id: u32,
-      sender: Sender,
-    },
-    GetName {
-      player_id: u32,
-      sender: Sender,
-    }
-  }
-
-  tokio::task::spawn(async {
-    // Future gremlin magic is in effect here.
-  });
 }
