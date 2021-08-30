@@ -34,22 +34,22 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 mod chunks;
 pub mod classic;
 pub mod plugins;
-use classic::*;
 use chunks::{FlatWorldGenerator, World};
+use classic::*;
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 pub const ERR_SENDING_RESULT: &str = "Error sending result";
-use std::sync::mpsc as stdmpsc;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::sync::broadcast;
-use once_cell::sync::Lazy;
 use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
+use once_cell::sync::Lazy;
 use std::io::Write;
+use std::sync::mpsc as stdmpsc;
 use std::sync::Arc;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 pub mod game;
 pub mod settings;
 use game::*;
@@ -66,28 +66,42 @@ pub struct ServerOptions {
   max_players: usize,
   motd: String,
 }
-static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| settings::get_options());
-#[tokio::main]
+static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| {
+  let mut x = settings::get_options();
+  x.max_players = std::cmp::min(x.max_players, 127);
+  x
+});
+#[tokio::main()]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut pregmts = PreGMTS::new();
-  pregmts.register_command("ver".to_string(), "", "Get server version", Box::new(|gmts: CMDGMTS, args, sender| {
-    Box::pin(async move {
-        gmts.chat_to_id(&format!("&aServer is running BetterThanMinecraft v{}.", VERSION), -1, sender).await;
+  pregmts.register_command(
+    "ver".to_string(),
+    "",
+    "Get server version",
+    Box::new(|gmts, args, sender| {
+      Box::pin(async move {
+        gmts
+          .chat_to_id(
+            &format!("&aServer is running BetterThanMinecraft v{}.", VERSION),
+            -1,
+            sender,
+          )
+          .await;
         0
-    })
-}));
-if CONFIGURATION.public {}
+      })
+    }),
+  );
+  if CONFIGURATION.public {}
   settings::get_whitelist();
   settings::get_ops();
   settings::get_banlist();
   log::info!("Starting BetterThanMinecraft v{}.", VERSION);
-  use tokio::runtime::Runtime;
-  //plugins::coreutils::CoreUtils::initialize(&mut pregmts);
+  plugins::coreutils::CoreUtils::initialize(&mut pregmts);
   //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
   let data = PlayerData { position: None };
-  let (console_send, console_recv) = stdmpsc::channel::<PlayerCommand>();
+  let (console_send, mut console_recv) = mpsc::channel::<PlayerCommand>(1000);
   let player = Player {
     data: data,
     op: true,
@@ -105,28 +119,29 @@ if CONFIGURATION.public {}
   let cgmts_2 = gmts.clone();
   tokio::spawn(async move {
     loop {
-       let mut command = String::new();
+      let mut command = String::new();
       let x = std::io::stdin().read_line(&mut command);
       if x.is_err() {
         log::error!("Error reading command!");
         continue;
       }
       let command = command.trim().to_string();
-      cgmts_1.execute_command(-69, format!("/{}", command)).await.unwrap();
+      cgmts_1
+        .execute_command(-69, format!("/{}", command))
+        .await
+        .unwrap();
     }
   });
-   tokio::spawn(async move {
+  tokio::spawn(async move {
     loop {
-        if let Ok(msg) = console_recv.recv() {
-          match msg {
-            PlayerCommand::Message { id, message } => {
-              log::info!("[MESSAGE TO CONSOLE] {}", message);
-            }
-            _ => {
-
-            }
+      if let Some(msg) = console_recv.recv().await {
+        match msg {
+          PlayerCommand::Message { id, message } => {
+            //log::info!("[MESSAGE TO CONSOLE] {}", message);
           }
+          _ => {}
         }
+      }
     }
   });
   // Pass around immutable references, and clone the sender.
@@ -137,34 +152,34 @@ if CONFIGURATION.public {}
   log::info!("Server listening on {}", CONFIGURATION.listen_address);
   let gmts = Arc::new(gmts);
   loop {
-    log::info!("A");
     let possible = listener.accept().await;
-    log::info!("B");
     if possible.is_err() {
-      log::info!("C");
       continue;
     }
     let (stream, _) = possible.unwrap();
-    log::info!("D");
     let gmts = gmts.clone();
-    log::info!("E");
     tokio::task::spawn(async move {
-      log::info!("F");
       if let None = new_incoming_connection_handler(stream, gmts).await {
         log::error!("Player join error!");
       }
     });
-    log::info!("balls");
   }
 }
 async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>) -> Option<()> {
-  log::info!("hallo!");
   let mut test = Box::pin(&mut stream);
   let spawn_position = gmts.get_spawnpos().await?;
-  let packet = ClassicPacketReader::read_packet_reader(&mut test).await.ok()?;
-  let (msg_send, recv) = stdmpsc::channel::<PlayerCommand>();
+  let packet = ClassicPacketReader::read_packet_reader(&mut test)
+    .await
+    .ok()?;
+  let (msg_send, recv) = mpsc::channel::<PlayerCommand>(100000000);
   drop(test);
-  if let classic::Packet::PlayerIdentification { p_ver, user_name, v_key, cpe_id } = packet {
+  if let classic::Packet::PlayerIdentification {
+    p_ver,
+    user_name,
+    v_key,
+    cpe_id,
+  } = packet
+  {
     let player_count = gmts.player_count().await?;
     if player_count + 1 > CONFIGURATION.max_players {
       let packet = classic::Packet::Disconnect {
@@ -172,8 +187,9 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       };
       stream
         .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await.ok()?;
-        log::info!("Kicked {} because the server is full.", user_name);
+        .await
+        .ok()?;
+      log::info!("Kicked {} because the server is full.", user_name);
       return None;
     }
     if user_name.len() >= 20 {
@@ -182,20 +198,27 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       };
       stream
         .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await.ok()?;
+        .await
+        .ok()?;
       log::info!(r#"{} tried to join with a too long name!"#, user_name);
       return None;
     }
-    let our_id = gmts.get_unused_id().await?; 
+    let our_id = gmts.get_unused_id().await?;
     let data = PlayerData {
       position: Some(spawn_position.clone()),
     };
-    if let Some(_) = gmts.kick_user_by_name(&user_name, "You logged in from another location").await {
-      log::info!("{} was already logged in! Kicked other instance.", user_name);
+    if let Some(_) = gmts
+      .kick_user_by_name(&user_name, "You logged in from another location")
+      .await
+    {
+      log::info!(
+        "{} was already logged in! Kicked other instance.",
+        user_name
+      );
     }
     let mut permission_level: usize;
     let mut op: bool;
-        let cpe = match cpe_id {
+    let cpe = match cpe_id {
       0x42 => true,
       _ => false,
     };
@@ -211,30 +234,51 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
     let mut supported_extensions: Option<HashMap<String, CPEExtensionData>> = None;
     if cpe {
       let extensions = gmts.get_extensions().await;
-      let ext_info = classic::Packet::ExtInfo { appname: format!("BetterThanMinecraft v{}", VERSION), extension_count: extensions.len() as i16};
+      let ext_info = classic::Packet::ExtInfo {
+        appname: format!("BetterThanMinecraft v{}", VERSION),
+        extension_count: extensions.len() as i16,
+      };
       stream
-      .write_all(&ClassicPacketWriter::serialize(ext_info).ok()?)
-      .await.ok()?;
+        .write_all(&ClassicPacketWriter::serialize(ext_info).ok()?)
+        .await
+        .ok()?;
       for (extension, data) in extensions {
-        let ext_entry = classic::Packet::ExtEntry { extname: extension.to_string(), version: data.version as i32};
+        let ext_entry = classic::Packet::ExtEntry {
+          extname: extension.to_string(),
+          version: data.version as i32,
+        };
         stream
-        .write_all(&ClassicPacketWriter::serialize(ext_entry).ok()?)
-        .await.ok()?;
+          .write_all(&ClassicPacketWriter::serialize(ext_entry).ok()?)
+          .await
+          .ok()?;
       }
       let mut test = Box::pin(&mut stream);
-      let (appname, extcount) = if let classic::Packet::ExtInfo { appname, extension_count } = ClassicPacketReader::read_packet_reader(&mut test).await.ok()? {
+      let (appname, extcount) = if let classic::Packet::ExtInfo {
+        appname,
+        extension_count,
+      } = ClassicPacketReader::read_packet_reader(&mut test)
+        .await
+        .ok()?
+      {
         (appname, extension_count)
       } else {
         return None;
       };
       let mut client_supported_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
       for _ in 0..extcount {
-        let (extname, version) = if let classic::Packet::ExtEntry { extname, version } = ClassicPacketReader::read_packet_reader(&mut test).await.ok()? {
+        let (extname, version) = if let classic::Packet::ExtEntry { extname, version } =
+          ClassicPacketReader::read_packet_reader(&mut test)
+            .await
+            .ok()?
+        {
           (extname, version)
         } else {
           return None;
         };
-        let data = CPEExtensionData { version: version as usize, required: false };
+        let data = CPEExtensionData {
+          version: version as usize,
+          required: false,
+        };
         client_supported_extensions.insert(extname, data);
       }
       let mut required_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
@@ -244,20 +288,25 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
         }
       }
       for (extension, data) in required_extensions {
-        if client_supported_extensions.get(&extension).is_none() || client_supported_extensions.get(&extension).unwrap().version != data.version {
+        if client_supported_extensions.get(&extension).is_none()
+          || client_supported_extensions.get(&extension).unwrap().version != data.version
+        {
           let packet = classic::Packet::Disconnect {
             reason: "Missing required extensions.".to_string(),
           };
           stream
             .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-            .await.ok()?;
-            log::info!("{} is missing required extensions.", user_name);
+            .await
+            .ok()?;
+          log::info!("{} is missing required extensions.", user_name);
           return None;
         }
       }
       let mut super_supported_extensions = HashMap::new();
       for (extension, data) in client_supported_extensions {
-        if extensions.get(&extension).is_some() && extensions.get(&extension).unwrap().version == data.version {
+        if extensions.get(&extension).is_some()
+          && extensions.get(&extension).unwrap().version == data.version
+        {
           super_supported_extensions.insert(extension, data);
         }
       }
@@ -268,11 +317,12 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       };
       stream
         .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await.ok()?;
-        log::info!("{} doesn't support CPE.", user_name);
+        .await
+        .ok()?;
+      log::info!("{} doesn't support CPE.", user_name);
       return None;
     }
-/*     let x = gmts.get_value("Coreutils_Whitelist").await?;
+    let x = gmts.get_value("Coreutils_Whitelist").await?;
     let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
     let (whitelist_enabled, whitelist) = whitelist.clone();
     //let whitelist = settings::get_whitelist();
@@ -288,10 +338,11 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       };
       stream
         .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
-        .await.ok()?;
-        log::info!("{} is not whitelisted.", user_name);
+        .await
+        .ok()?;
+      log::info!("{} is not whitelisted.", user_name);
       return None;
-    } */
+    }
     let player = Player {
       data: data,
       op,
@@ -300,21 +351,35 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       id: our_id,
       name: user_name.clone(),
       message_send: msg_send.clone(),
-      supported_extensions
+      supported_extensions,
     };
     gmts.register_user(player).await?;
-    if let None = internal_inc_handler(stream, gmts.clone(), recv, &user_name.clone(), our_id as u32, p_ver, op, cpe).await {
+    if let None = internal_inc_handler(
+      stream,
+      gmts.clone(),
+      recv,
+      &user_name.clone(),
+      our_id as u32,
+      p_ver,
+      op,
+      cpe,
+    )
+    .await
+    {
       let hooks = gmts.get_ondisconnect_hooks().await;
       for hook in &*hooks {
         hook(gmts.clone(), our_id as i8).await;
-      } 
+      }
       if let None = gmts.remove_user(our_id as i8).await {
         log::error!("Error removing user.");
       }
       if let None = gmts.return_id(our_id as i8).await {
         log::error!("Error returning id.");
       }
-      if let None = gmts.chat_broadcast(&format!("&e{} left the game.", user_name), -1).await {
+      if let None = gmts
+        .chat_broadcast(&format!("&e{} left the game.", user_name), -1)
+        .await
+      {
         log::error!("Error broadcasting chat message.");
       }
     }
@@ -324,8 +389,17 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
   }
   Some(())
 }
-async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdmpsc::Receiver<PlayerCommand>, our_username: &str, our_id: u32, our_p_ver: u8, op: bool, cpe: bool) -> Option<()> {
-  let hooks = gmts.get_earlyonconnect_hooks().await;
+async fn internal_inc_handler(
+  mut stream: TcpStream,
+  gmts: Arc<GMTS>,
+  mut reciever: mpsc::Receiver<PlayerCommand>,
+  our_username: &str,
+  our_id: u32,
+  our_p_ver: u8,
+  op: bool,
+  cpe: bool,
+) -> Option<()> {
+     let hooks = gmts.get_earlyonconnect_hooks().await;
   let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
   for hook in &*hooks {
     hook(gmts.clone(), stream.clone(), our_id as i8).await?;
@@ -337,7 +411,8 @@ async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdm
     CONFIGURATION.server_name.clone(),
     CONFIGURATION.motd.clone(),
     op,
-  ).ok()?;
+  )
+  .ok()?;
   stream.write_all(&server_identification).await.unwrap();
   log::info!(
     "{}[{}] logging in with entity id {} protocol version {}",
@@ -346,7 +421,10 @@ async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdm
     our_id,
     our_p_ver
   );
-  if let None = gmts.chat_broadcast(&format!("&e{} logging in...", our_username), -1).await {
+  if let None = gmts
+    .chat_broadcast(&format!("&e{} logging in...", our_username), -1)
+    .await
+  {
     log::error!("Error broadcasting chat message.");
   }
   let mut world = if let Some(w) = gmts.get_world().await {
@@ -359,6 +437,7 @@ async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdm
     .to_packets(&mut Box::pin(&mut stream))
     .await
     .expect("Shouldn't fail!");
+  drop(world);
   log::info!("World sent to {}", our_username);
   let teleport_player = classic::Packet::PlayerTeleportS {
     player_id: -1,
@@ -366,12 +445,16 @@ async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdm
   };
   let iswrite = stream
     .write_all(&ClassicPacketWriter::serialize(teleport_player).ok()?)
-    .await.ok()?;
-    let gmts2 = gmts.clone();
-  if let None = gmts.chat_broadcast(&format!("&e{} joined the game.", our_username), -1).await {
+    .await
+    .ok()?;
+  let gmts2 = gmts.clone();
+  if let None = gmts
+    .chat_broadcast(&format!("&e{} joined the game.", our_username), -1)
+    .await
+  {
     log::error!("Error broadcasting chat message.");
   }
-  let hooks = gmts.get_onconnect_hooks().await;
+     let hooks = gmts.get_onconnect_hooks().await;
   let stream = std::sync::Arc::new(tokio::sync::Mutex::new(stream));
   for hook in &*hooks {
     hook(gmts.clone(), stream.clone(), our_id as i8).await?;
@@ -383,226 +466,222 @@ async fn internal_inc_handler(stream: TcpStream, gmts: Arc<GMTS>, reciever: stdm
   let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
   tokio::task::spawn(async move {
     let function = || async move {
-      if let None = gmts2.spawn_all_players(our_id as i8).await {
-        return None;
-      }
+      let mut sent_plrs = false;
       loop {
         match recv_1.try_recv() {
           Ok(_) => {
             return Some(());
           }
-          _ => {
-
-          }
+          _ => {}
         }
-        let recv = reciever.try_recv();
+        let recv = reciever.recv().await;
+        if !sent_plrs {
+          if let None = gmts2.spawn_all_players(our_id as i8).await {
+            return None;
+          }
+          sent_plrs = true;
+        }
         match recv {
-          Ok(msg) => {
-            match msg {
-              PlayerCommand::SetBlock { block } => {
-                let packet = classic::Packet::SetBlockS { block };
-                let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                        return None;
-                }
+          Some(msg) => match msg {
+            PlayerCommand::SetBlock { block } => {
+              let packet = classic::Packet::SetBlockS { block };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
               }
-              PlayerCommand::SpawnPlayer { position, id, name } => {
-                let packet = classic::Packet::SpawnPlayer {
+            }
+            PlayerCommand::SpawnPlayer { position, id, name } => {
+              let packet = classic::Packet::SpawnPlayer {
+                player_id: id,
+                name,
+                position,
+              };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::DespawnPlayer { id } => {
+              let packet = classic::Packet::DespawnPlayer { player_id: id };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::PlayerTeleport { position, id } => {
+              let packet = classic::Packet::PlayerTeleportS {
+                player_id: id,
+                position: position,
+              };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::Message { id, message } => {
+              let message = message.as_bytes().to_vec();
+              let message = message.chunks(64).collect::<Vec<&[u8]>>();
+              for message in message {
+                let message = String::from_utf8_lossy(message).to_string();
+                let packet = classic::Packet::Message {
                   player_id: id,
-                  name,
-                  position,
+                  message,
                 };
                 let packet = ClassicPacketWriter::serialize(packet).unwrap();
                 let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                  return None;
-                }
-              }
-              PlayerCommand::DespawnPlayer { id } => {
-                let packet = classic::Packet::DespawnPlayer { player_id: id };
-                let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                  return None;
-                }
-              }
-              PlayerCommand::PlayerTeleport { position, id } => {
-                let packet = classic::Packet::PlayerTeleportS {
-                  player_id: id,
-                  position: position,
-                };
-                let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                  return None;
-                }
-              }
-              PlayerCommand::Message { id, message } => {
-                let message = message.as_bytes().to_vec();
-                let message = message.chunks(64).collect::<Vec<&[u8]>>();
-                for message in message {
-                  let message = String::from_utf8_lossy(message).to_string();
-                  let packet = classic::Packet::Message {
-                    player_id: id,
-                    message,
-                  };
-                  let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                  let write = writehalf.write_all(&packet).await;
-                  if write.is_err() {
-                    return None;
-                  }
-                }
-              }
-              PlayerCommand::Disconnect { reason } => {
-                let packet = classic::Packet::Disconnect { reason };
-                let packet = ClassicPacketWriter::serialize(packet).unwrap();
-                let write = writehalf.write_all(&packet).await;
-                if write.is_err() {
-                  return None;
-                }
-              }
-              PlayerCommand::RawPacket { bytes } => {
-                let write = writehalf.write_all(&bytes).await;
                 if write.is_err() {
                   return None;
                 }
               }
             }
-          }
-          Err(_) => {
-            continue;
+            PlayerCommand::Disconnect { reason } => {
+              let packet = classic::Packet::Disconnect { reason };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+            PlayerCommand::RawPacket { bytes } => {
+              let write = writehalf.write_all(&bytes).await;
+              if write.is_err() {
+                return None;
+              }
+            }
+          },
+          None => {
+            return None;
           }
         }
       }
     };
     match function().await {
-      None => {
-        send_2.send(None).unwrap();
-      }
-      _ => {
-
-      }
+      None => if let None = send_2.send(None).ok() {},
+      _ => {}
     }
   });
   let gmts = gmts.clone();
-  let our_username = our_username.to_string(); 
-    let packet_handler_wrapper = || async move {
-      //let mut stored_msg = String::new();
-      use tokio::io::AsyncReadExt;
-      loop {
-        match recv_2.try_recv() {
-          Ok(_) => {
-            //log::info!("\n\n\nPacket handler dropping for {}\n\n\n", our_username);
-            return Some(());
-          }
-          _ => {
-            //log::info!("Packet handler _ for {}", our_username);
-          }
+  let our_username = our_username.to_string();
+  let packet_handler_wrapper = || async move {
+    //let mut stored_msg = String::new();
+    use tokio::io::AsyncReadExt;
+    loop {
+      match recv_2.try_recv() {
+        Ok(_) => {
+          //log::info!("\n\n\nPacket handler dropping for {}\n\n\n", our_username);
+          return Some(());
         }
-        //log::info!("Packet handler running for {}", our_username);
-        let mut s_p_id = [0; 1];
-        let x = readhalf.peek(&mut s_p_id).await.ok();
-        if x.is_none() {
-          return None;
+        _ => {
+          //log::info!("Packet handler _ for {}", our_username);
         }
-        let hooks = gmts.get_packetrecv_hooks().await;
-        if let Some(hook) = hooks.get(&s_p_id[0]) {
-          let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
-          hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
-          readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
-          continue;
-        };
-        //println!("Started");
-        let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
-        if packet.is_err() {
-          return None;
-        }
-        let packet = packet.unwrap();
-        match packet {
-          classic::Packet::PlayerClicked {
-            button,
-            action,
-            yaw,
-            pitch,
-            target_entity_id,
-            target_block_x,
-            target_block_y,
-            target_block_z,
-            target_block_face,
-          } => {
-    
-          }
-          classic::Packet::SetBlockC {
-            coords,
-            mode,
-            block_type,
-          } => {
-            match mode {
-              0x00 => {
-                let block = Block {
-                  position: coords,
-                  id: 0x00,
-                };
-                if let None = gmts.set_block(&block, our_id as i8).await {
-                    if let Some(x) = gmts.get_block(block.position).await {
-                        gmts.block_to_id(x, our_id as i8).await;
-                    } else {
-                      //log::error!("Block error!");
-                    }
+      }
+      //log::info!("Packet handler running for {}", our_username);
+      let mut s_p_id = [0; 1];
+      let x = readhalf.peek(&mut s_p_id).await.ok();
+      if x.is_none() {
+        return None;
+      }
+      let hooks = gmts.get_packetrecv_hooks().await;
+      if let Some(hook) = hooks.get(&s_p_id[0]) {
+        let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
+        hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
+        readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
+        continue;
+      };
+      //println!("Started");
+      let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
+      if packet.is_err() {
+        return None;
+      }
+      let packet = packet.unwrap();
+      match packet {
+        classic::Packet::PlayerClicked {
+          button,
+          action,
+          yaw,
+          pitch,
+          target_entity_id,
+          target_block_x,
+          target_block_y,
+          target_block_z,
+          target_block_face,
+        } => {}
+        classic::Packet::SetBlockC {
+          coords,
+          mode,
+          block_type,
+        } => {
+          match mode {
+            0x00 => {
+              let block = Block {
+                position: coords,
+                id: 0x00,
+              };
+              if let None = gmts.set_block(&block, our_id as i8).await {
+                if let Some(x) = gmts.get_block(block.position).await {
+                  gmts.block_to_id(x, our_id as i8).await;
+                } else {
+                  //log::error!("Block error!");
                 }
               }
-              _ => {
-                let block = Block {
-                  position: coords,
-                  id: block_type,
-                };
-                if let None = gmts.set_block(&block, our_id as i8).await {
-                  if let Some(x) = gmts.get_block(block.position).await {
-                      gmts.block_to_id(x, our_id as i8).await;
-                  } else {
-                    //log::error!("Block error!");
-                  }
+            }
+            _ => {
+              let block = Block {
+                position: coords,
+                id: block_type,
+              };
+              if let None = gmts.set_block(&block, our_id as i8).await {
+                if let Some(x) = gmts.get_block(block.position).await {
+                  gmts.block_to_id(x, our_id as i8).await;
+                } else {
+                  //log::error!("Block error!");
                 }
               }
             }
           }
-          classic::Packet::PositionAndOrientationC { position, .. } => {
-            gmts.send_position_update(our_id as i8, position).await;
-          }
-          classic::Packet::MessageC { message, unused } => {
-              //if unused == 0 {
-                 if message.starts_with("/") {
-                  gmts.execute_command(our_id as i8, message).await;
-                } else {
-                  let mut prefix = format!("<{}> ", our_username);
-                  prefix.push_str(&message);
-                  let message = prefix;
-                  let message = message.as_bytes().to_vec();
-                  let message = message.chunks(64).collect::<Vec<&[u8]>>();
-                  let mut msg2 = vec![];
-                  for m in message {
-                    msg2.push(String::from_utf8_lossy(&m).to_string());
-                  }
-                  let m = msg2.remove(0);
-                  gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
-                  for m in msg2 {
-                  gmts.chat_broadcast(&format!("> {}", m), (our_id as u8) as i8).await;
-                }
-                }
-              //}
-          }
-          _ => {}
         }
+        classic::Packet::PositionAndOrientationC { position, .. } => {
+          gmts.send_position_update(our_id as i8, position).await;
+        }
+        classic::Packet::MessageC { message, unused } => {
+          //if unused == 0 {
+          if message.starts_with("/") {
+            gmts.execute_command(our_id as i8, message).await;
+          } else {
+            let mut prefix = format!("<{}> ", our_username);
+            prefix.push_str(&message);
+            let message = prefix;
+            let message = message.as_bytes().to_vec();
+            let message = message.chunks(64).collect::<Vec<&[u8]>>();
+            let mut msg2 = vec![];
+            for m in message {
+              msg2.push(String::from_utf8_lossy(&m).to_string());
+            }
+            let m = msg2.remove(0);
+            gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
+            for m in msg2 {
+              gmts
+                .chat_broadcast(&format!("> {}", m), (our_id as u8) as i8)
+                .await;
+            }
+          }
+          //}
+        }
+        _ => {}
       }
-    };
+    }
+  };
   match packet_handler_wrapper().await {
     None => {
-      send_1.send(None).ok().unwrap();
-    }
-    _ => {
+      if let None = send_1.send(None).ok() {
 
+      }
     }
+    _ => {}
   }
   //let mut test = Box::pin(&mut readhalf);
   //let (a, b) = tokio::join!(messagehandle, packethandle);

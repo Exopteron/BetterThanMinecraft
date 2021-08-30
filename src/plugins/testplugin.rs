@@ -1,4 +1,4 @@
-use crate::game::*;
+/* use crate::game::*;
 use crate::classic::*;
 use tokio::io::AsyncWriteExt;
 pub struct TestPlugin {}
@@ -144,7 +144,7 @@ impl crate::game::Plugin for TestPlugin {
                 0
             })
         }));
-         pre_gmts.register_command("blockenabled".to_string(), "", "", Box::new(move |gmts: CMDGMTS, args, sender| {
+/*          pre_gmts.register_command("blockenabled".to_string(), "", "", Box::new(move |gmts: CMDGMTS, args, sender| {
             Box::pin(async move {
                 let perm_level = if let Some(p) = gmts.get_permission_level(sender).await {
                     p
@@ -181,7 +181,7 @@ impl crate::game::Plugin for TestPlugin {
                 }
                 command
             })
-        }));
+        })); */
 /*         pre_gmts.register_setblock_hook(Box::new(|gmts: CMDGMTS, block, sender_id| {
             Box::pin(async move {
                 let block_break = if let Some(x) = gmts.get_value("block_break_enabled").await {
@@ -210,3 +210,4 @@ impl crate::game::Plugin for TestPlugin {
         })); */
     }
 }
+ */

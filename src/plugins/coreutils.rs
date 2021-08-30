@@ -15,7 +15,7 @@ Command plan:
 */
 impl crate::game::Plugin for CoreUtils {
     fn initialize(pre_gmts: &mut PreGMTS) {
-        pre_gmts.register_oninitialize(Box::new(move |gmts: CMDGMTS| {
+        pre_gmts.register_oninitialize(Box::new(move |gmts | {
             Box::pin(async move {
                 let pos = gmts.get_spawnpos().await?;
                 gmts.new_value(
@@ -61,7 +61,7 @@ impl crate::game::Plugin for CoreUtils {
             "list".to_string(),
             "",
             "Get player list",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -83,7 +83,7 @@ impl crate::game::Plugin for CoreUtils {
             "help".to_string(),
             "",
             "Get command help",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -123,7 +123,7 @@ impl crate::game::Plugin for CoreUtils {
             "setworldspawn".to_string(),
             "",
             "Set the world spawnpoint to your current position.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -177,7 +177,7 @@ impl crate::game::Plugin for CoreUtils {
             "tp".to_string(),
             "(persona) (personb)",
             "teleport person a to person b.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -228,7 +228,7 @@ impl crate::game::Plugin for CoreUtils {
             "permlevel".to_string(),
             "",
             "Get your permission level",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         gmts.chat_to_id(&format!("Your permission level is {}.", p), -1, sender)
@@ -244,7 +244,7 @@ impl crate::game::Plugin for CoreUtils {
             "say".to_string(),
             "(text)",
             "Broadcast a message.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -273,7 +273,7 @@ impl crate::game::Plugin for CoreUtils {
             "me".to_string(),
             "(text)",
             "add desc here",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -302,7 +302,7 @@ impl crate::game::Plugin for CoreUtils {
             "msg".to_string(),
             "(player) (message)",
             "Send a private message to another player",
-            Box::new(|gmts: CMDGMTS, args, sender| {
+            Box::new(|gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 1 {
@@ -340,7 +340,7 @@ impl crate::game::Plugin for CoreUtils {
             "stop".to_string(),
             "",
             "Save the world file and stop the server.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -378,7 +378,7 @@ impl crate::game::Plugin for CoreUtils {
             "save-all".to_string(),
             "",
             "Save the world file.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -422,7 +422,7 @@ impl crate::game::Plugin for CoreUtils {
             "whitelist".to_string(),
             "(on,off,add,remove,list)",
             "Control the whitelist.",
-            Box::new(move |gmts: CMDGMTS, mut args, sender| {
+            Box::new(move |gmts, mut args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -650,7 +650,7 @@ impl crate::game::Plugin for CoreUtils {
             "unban".to_string(),
             "(player)",
             "Unban a user from the game.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -683,7 +683,7 @@ impl crate::game::Plugin for CoreUtils {
             "ban".to_string(),
             "(player) (reason)",
             "Ban a user from the game.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -752,7 +752,7 @@ impl crate::game::Plugin for CoreUtils {
             "kick".to_string(),
             "(player) (reason)",
             "Kick a user from the game.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -812,7 +812,7 @@ impl crate::game::Plugin for CoreUtils {
             "op".to_string(),
             "(player)",
             "Give a player operator status.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -875,7 +875,7 @@ impl crate::game::Plugin for CoreUtils {
             "deop".to_string(),
             "(player)",
             "Remove a player's operator status.",
-            Box::new(move |gmts: CMDGMTS, args, sender| {
+            Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
                         if p >= 4 {
@@ -946,7 +946,7 @@ impl crate::game::Plugin for CoreUtils {
                 })
             }),
         );
-        pre_gmts.register_setblock_hook(Box::new(|gmts: CMDGMTS, block, sender_id| {
+        pre_gmts.register_setblock_hook(Box::new(|gmts , block, sender_id| {
             Box::pin(async move {
                 if let Some(p) = gmts.get_permission_level(sender_id as i8).await {
                     if p < 4 {
