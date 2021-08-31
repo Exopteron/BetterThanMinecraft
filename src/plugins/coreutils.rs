@@ -239,7 +239,7 @@ impl crate::game::Plugin for CoreUtils {
                             };
                             if let Some(last) = player_list.last() {
                                 let last = last.clone();
-                                player_list.remove(player_list.len());
+                                player_list.remove(player_list.len() - 1);
                                 let mut string = "&7List: ".to_string();
                                 for name in &player_list {
                                     string.push_str(&format!("&c{}&7, ", name));

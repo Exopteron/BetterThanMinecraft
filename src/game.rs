@@ -279,7 +279,7 @@ impl CMDGMTS {
         Some(())
     }
     pub async fn chat_to_permlevel(&self, message: &str, id: i8, level: usize) -> Option<()> {
-        log::info!("[CHAT to perm level >= {}]: {}", level, message);
+        log::info!("[CHAT to perm level >= {}]: {}", level, crate::strip_mc_colorcodes(message));
         let (res_send, res_recv) = oneshot::channel();
         let message = PlayerCommand::Message {
             id: (id as u8) as i8,
