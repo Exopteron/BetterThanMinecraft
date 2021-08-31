@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     settings::get_ops();
     settings::get_banlist();
     plugins::coreutils::CoreUtils::initialize(&mut pregmts);
-    //plugins::anticheat::Anticheat::initialize(&mut pregmts);
+    plugins::anticheat::Anticheat::initialize(&mut pregmts);
     //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
     //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
     let gmts = GMTS::setup(pregmts).await;
