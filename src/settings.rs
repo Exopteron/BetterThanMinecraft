@@ -69,7 +69,7 @@ time_in_ms = 50
 
 [anticheat]
 anti_speed_tp = true
-reach_distance = 6.0
+reach_distance = 5.0
 "#;
 pub fn get_options() -> ServerOptions {
     Builder::new()
