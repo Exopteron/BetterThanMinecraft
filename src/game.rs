@@ -353,6 +353,25 @@ impl CMDGMTS {
         res_recv.await.ok()?;
         Some(())
     }
+    pub async fn get_cpe_ids(&self) -> Option<Vec<i8>> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::SupportedCPEIds {
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
+    pub async fn get_cpe_support(&self, id: i8) -> Option<bool> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetSupportCPE {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -1145,6 +1164,28 @@ impl GMTS {
                             res_send.send(());
                         }
                     }
+                    PlayersCommand::GetSupportCPE { id, res_send } => {
+                        let us = players.get(&id);
+                        if us.is_none() {
+                            res_send.send(None).expect(ERR_SENDING_RESULT);
+                        } else {
+                            let us = us.unwrap();
+                            let x = match us.supported_extensions {
+                                Some(_) => true,
+                                None => false,
+                            };
+                            res_send.send(Some(x)).expect(ERR_SENDING_RESULT);
+                        }
+                    }
+                    PlayersCommand::SupportedCPEIds { res_send } => {
+                        let mut supported_cpe_ids = vec![];
+                        for (id, player) in &players {
+                            if player.supported_extensions.is_some() {
+                                supported_cpe_ids.push(*id as i8);
+                            }
+                        }
+                        res_send.send(Some(supported_cpe_ids));
+                    }
                     PlayersCommand::IsOperator { id, res_send } => {
                         let us = players.get(&id);
                         if us.is_none() {
@@ -1338,24 +1379,24 @@ impl GMTS {
             loop {
                 match recv.recv().await.unwrap() {
                     TempCrntIdCommand::FetchFreeID { res_send } => {
-                        let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
+/*                         let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
                         let len = ids.len();
                         for _ in 0..len {
                             ids.swap(rng.gen_range(0, len), rng.gen_range(0, len));
                         }
-                        drop(rng);
+                        drop(rng); */
                         res_send
                             .send(ids.pop().unwrap() as u32)
                             .expect("Shouldn't fail");
                     } // ...
                     TempCrntIdCommand::ReturnFreeID { id, res_send } => {
                         ids.push(id as usize);
-                        let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
+/*                         let mut rng = rand::rngs::OsRng::new().expect("RNG error!");
                         let len = ids.len();
                         for _ in 0..len {
                             ids.swap(rng.gen_range(0, len), rng.gen_range(0, len));
                         }
-                        drop(rng);
+                        drop(rng); */
                         res_send.send(()).expect("Shouldn't fail");
                     }
                 }
@@ -1778,6 +1819,25 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()
     }
+    pub async fn get_cpe_ids(&self) -> Option<Vec<i8>> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::SupportedCPEIds {
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
+    pub async fn get_cpe_support(&self, id: i8) -> Option<bool> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetSupportCPE {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -2039,6 +2099,13 @@ pub enum PlayersCommand {
         my_id: u32,
         position: PlayerPosition,
         res_send: oneshot::Sender<Option<()>>,
+    },
+    SupportedCPEIds {
+        res_send: oneshot::Sender<Option<Vec<i8>>>,
+    },
+    GetSupportCPE {
+        id: u32,
+        res_send: oneshot::Sender<Option<bool>>,
     },
     GetPosition {
         id: u32,

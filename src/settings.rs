@@ -52,6 +52,9 @@ server_name = "BetterThanMinecraft"
 max_players = 20
 # Message of the day.
 motd = "A BetterThanMinecraft server"
+
+[anticheat]
+anti_speed_tp = true
 "#;
 pub fn get_options() -> ServerOptions {
     Builder::new()

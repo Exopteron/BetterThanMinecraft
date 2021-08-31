@@ -47,6 +47,10 @@ pub mod game;
 pub mod settings;
 use game::*;
 #[derive(serde_derive::Deserialize)]
+pub struct AnticheatOptions {
+  anti_speed_tp: bool,
+}
+#[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
   authenticate_usernames: bool,
   do_heartbeat: bool,
@@ -59,13 +63,14 @@ pub struct ServerOptions {
   server_name: String,
   max_players: usize,
   motd: String,
+  anticheat: AnticheatOptions,
 }
 static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| {
   let mut x = settings::get_options();
   x.max_players = std::cmp::min(x.max_players, 127);
   x
 });
-#[tokio::main()]
+#[tokio::main(worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut pregmts = PreGMTS::new();
   pregmts.register_command(
@@ -91,12 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   settings::get_banlist();
   log::info!("Starting BetterThanMinecraft v{}.", VERSION);
   plugins::coreutils::CoreUtils::initialize(&mut pregmts);
+  //plugins::anticheat::Anticheat::initialize(&mut pregmts);
   //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
   //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
   let gmts = GMTS::setup(pregmts).await;
   let gmts = Arc::new(gmts);
   let data = PlayerData { position: None };
-  let (console_send, mut console_recv) = mpsc::channel::<PlayerCommand>(1000);
+  let (console_send, console_recv) = mpsc::channel::<PlayerCommand>(1000);
   let player = Player {
     data: data,
     op: true,
@@ -109,22 +115,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
   gmts.register_user(player).await.unwrap();
   let cgmts_1 = gmts.clone();
-  tokio::spawn(async move {
+/*   tokio::spawn(async move {
+    use tokio_read_line::{ReadLines, Result};
+    let mut lines = ReadLines::new().unwrap();
     loop {
-      let mut command = String::new();
-      let x = std::io::stdin().read_line(&mut command);
-      if x.is_err() {
-        log::error!("Error reading command!");
+      use std::io::Write;
+      print!("> ");
+      std::io::stdout().flush();
+      let command = if let Some(l) = lines.next().await.ok() {
+        l
+      } else {
+        log::error!("Stdin error.");
         continue;
-      }
+      };
       let command = command.trim().to_string();
       cgmts_1
         .execute_command(-69, format!("/{}", command))
         .await
         .unwrap();
     }
-  });
-  tokio::spawn(async move {
+  }); */
+/*   tokio::spawn(async move {
     loop {
       if let Some(msg) = console_recv.recv().await {
         match msg {
@@ -135,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
       }
     }
-  });
+  }); */
   // Pass around immutable references, and clone the sender.
 
   //example(&gmts);
@@ -505,7 +516,9 @@ async fn internal_inc_handler(
   let (send_2, mut recv_2) = oneshot::channel::<Option<()>>();
   tokio::task::spawn(async move {
     let function = || async move {
-      let mut sent_plrs = false;
+      if let None = gmts2.spawn_all_players(our_id as i8).await {
+        return None;
+      }
       loop {
         match recv_1.try_recv() {
           Ok(_) => {
@@ -514,12 +527,6 @@ async fn internal_inc_handler(
           _ => {}
         }
         let recv = reciever.recv().await;
-        if !sent_plrs {
-          if let None = gmts2.spawn_all_players(our_id as i8).await {
-            return None;
-          }
-          sent_plrs = true;
-        }
         match recv {
           Some(msg) => match msg {
             PlayerCommand::SetBlock { block } => {
