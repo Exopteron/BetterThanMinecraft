@@ -10,6 +10,8 @@
 /src/modernchunks.rs
 /src/mcprotocol.rs.old
 /src/mains.rs
-/BetterThanMinecraft
+/BetterThanMinecraft*
 /config.toml
 /launch.json
+/builds
+/buildscript.sh
