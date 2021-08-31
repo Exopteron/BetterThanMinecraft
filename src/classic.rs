@@ -288,14 +288,19 @@ pub struct ClassicPacketReader {}
 impl ClassicPacketReader {
   pub async fn read_packet_reader<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    username: &str,
   ) -> std::io::Result<Packet> {
-    let id = ClassicPacketUtils::read_byte(reader).await?;
+    let mut crme = false;
+    let id = ClassicPacketUtils::read_byte(reader, crme).await?;
     match id {
       0x00 => {
-        let protocol_ver = ClassicPacketUtils::read_byte(reader).await?;
-        let username = ClassicPacketUtils::read_string(reader).await?;
-        let verification_key = ClassicPacketUtils::read_string(reader).await?;
-        let unused = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x00", username);
+        }
+        let protocol_ver = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let username = ClassicPacketUtils::read_string(reader, crme).await?;
+        let verification_key = ClassicPacketUtils::read_string(reader, crme).await?;
+        let unused = ClassicPacketUtils::read_byte(reader, crme).await?;
         let packet = Packet::PlayerIdentification {
           p_ver: protocol_ver,
           user_name: username,
@@ -305,15 +310,18 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x22 => {
-        let button = ClassicPacketUtils::read_byte(reader).await?;
-        let action = ClassicPacketUtils::read_byte(reader).await?;
-        let yaw = ClassicPacketUtils::read_short(reader).await?;
-        let pitch = ClassicPacketUtils::read_short(reader).await?;
-        let target_entity_id = ClassicPacketUtils::read_byte(reader).await?;
-        let target_block_x = ClassicPacketUtils::read_short(reader).await?;
-        let target_block_y = ClassicPacketUtils::read_short(reader).await?;
-        let target_block_z = ClassicPacketUtils::read_short(reader).await?;
-        let target_block_face = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x22", username);
+        }
+        let button = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let action = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let yaw = ClassicPacketUtils::read_short(reader, crme).await?;
+        let pitch = ClassicPacketUtils::read_short(reader, crme).await?;
+        let target_entity_id = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let target_block_x = ClassicPacketUtils::read_short(reader, crme).await?;
+        let target_block_y = ClassicPacketUtils::read_short(reader, crme).await?;
+        let target_block_z = ClassicPacketUtils::read_short(reader, crme).await?;
+        let target_block_face = ClassicPacketUtils::read_byte(reader, crme).await?;
         let packet = Packet::PlayerClicked {
           button,
           action,
@@ -328,15 +336,21 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x13 => {
-        let support_level = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x13", username);
+        }
+        let support_level = ClassicPacketUtils::read_byte(reader, crme).await?;
         let packet = Packet::CustomBlockSupportLevel {
           support_level
         };
         return Ok(packet);
       }
       0x10 => {
-        let appname = ClassicPacketUtils::read_string(reader).await?;
-        let extension_count = ClassicPacketUtils::read_short(reader).await?;
+        if crme {
+          log::info!("{} 0x10", username);
+        }
+        let appname = ClassicPacketUtils::read_string(reader, crme).await?;
+        let extension_count = ClassicPacketUtils::read_short(reader, crme).await?;
         let packet = Packet::ExtInfo {
           appname,
           extension_count
@@ -344,8 +358,11 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x11 => {
-        let extname = ClassicPacketUtils::read_string(reader).await?;
-        let version = ClassicPacketUtils::read_int(reader).await?;
+        if crme {
+          log::info!("{} 0x11", username);
+        }
+        let extname = ClassicPacketUtils::read_string(reader, crme).await?;
+        let version = ClassicPacketUtils::read_int(reader, crme).await?;
         let packet = Packet::ExtEntry {
           extname,
           version
@@ -353,12 +370,15 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x08 => {
-        let pid = ClassicPacketUtils::read_byte(reader).await?;
-        let x = ClassicPacketUtils::read_short(reader).await?;
-        let y = ClassicPacketUtils::read_short(reader).await?;
-        let z = ClassicPacketUtils::read_short(reader).await?;
-        let yaw = ClassicPacketUtils::read_byte(reader).await?;
-        let pitch = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x08", username);
+        }
+        let pid = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let x = ClassicPacketUtils::read_short(reader, crme).await?;
+        let y = ClassicPacketUtils::read_short(reader, crme).await?;
+        let z = ClassicPacketUtils::read_short(reader, crme).await?;
+        let yaw = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let pitch = ClassicPacketUtils::read_byte(reader, crme).await?;
         let coords = PlayerPosition {
           x: x as u16,
           y: y as u16,
@@ -373,11 +393,14 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x05 => {
-        let x = ClassicPacketUtils::read_short(reader).await?;
-        let y = ClassicPacketUtils::read_short(reader).await?;
-        let z = ClassicPacketUtils::read_short(reader).await?;
-        let mode = ClassicPacketUtils::read_byte(reader).await?;
-        let blocktype = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x05", username);
+        }
+        let x = ClassicPacketUtils::read_short(reader, crme).await?;
+        let y = ClassicPacketUtils::read_short(reader, crme).await?;
+        let z = ClassicPacketUtils::read_short(reader, crme).await?;
+        let mode = ClassicPacketUtils::read_byte(reader, crme).await?;
+        let blocktype = ClassicPacketUtils::read_byte(reader, crme).await?;
         let coords = BlockPosition {
           x: x as usize,
           y: y as usize,
@@ -391,12 +414,15 @@ impl ClassicPacketReader {
         return Ok(packet);
       }
       0x0d => {
-        let x = ClassicPacketUtils::read_byte(reader).await?;
+        if crme {
+          log::info!("{} 0x0d", username);
+        }
+        let x = ClassicPacketUtils::read_byte(reader, crme).await?;
         let message: String;
         if x == 0x01 {
-          message = ClassicPacketUtils::read_string_trimless(reader).await?;
+          message = ClassicPacketUtils::read_string_trimless(reader, crme).await?;
         } else {
-          message = ClassicPacketUtils::read_string(reader).await?;
+          message = ClassicPacketUtils::read_string(reader, crme).await?;
         }
         let packet = Packet::MessageC { message: message, unused: x };
         return Ok(packet);
@@ -414,41 +440,61 @@ pub struct ClassicPacketUtils {}
 impl ClassicPacketUtils {
   async fn read_byte<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    log: bool,
   ) -> std::io::Result<u8> {
     let mut byte = [0; 1];
     reader.read_exact(&mut byte).await?;
+    if log {
+      log::info!("Byte: {}", byte[0]);
+    }
     return Ok(byte[0]);
   }
   async fn read_short<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    log: bool,
   ) -> std::io::Result<i16> {
     let mut byte = [0; 2];
     reader.read_exact(&mut byte).await?;
     let short = i16::from_be_bytes(byte);
+    if log {
+      log::info!("Short: {}", short);
+    }
     return Ok(short);
   }
   async fn read_int<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    log: bool,
   ) -> std::io::Result<i32> {
     let mut byte = [0; 4];
     reader.read_exact(&mut byte).await?;
     let short = i32::from_be_bytes(byte);
+    if log {
+      log::info!("Int: {}", short);
+    }
     return Ok(short);
   }
   async fn read_string<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    log: bool,
   ) -> std::io::Result<String> {
     let mut byte = [0; 64];
     reader.read_exact(&mut byte).await?;
     let string = String::from_utf8_lossy(&byte).to_string();
+    if log {
+      log::info!("String: {}", string);
+    }
     return Ok(string.trim_matches(char::from(0x20)).to_string());
   }
   async fn read_string_trimless<'a>(
     reader: &mut Pin<Box<impl tokio::io::AsyncRead + 'a>>,
+    log: bool,
   ) -> std::io::Result<String> {
     let mut byte = [0; 64];
     reader.read_exact(&mut byte).await?;
     let string = String::from_utf8_lossy(&byte).to_string();
+    if log {
+      log::info!("String trimless: {}", string);
+    }
     return Ok(string);
   }
 }

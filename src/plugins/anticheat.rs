@@ -28,8 +28,9 @@ impl crate::game::Plugin for Anticheat {
             Box::new(|gmts, stream, packet_id, sender_id| {
                 Box::pin(async move {
                     let mut stream = stream.lock().await;
+                    let username = gmts.get_username(sender_id as i8).await?;
                     if let crate::classic::Packet::PositionAndOrientationC { position, .. } =
-                        ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream))
+                        ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream), &username)
                             .await
                             .ok()?
                     {

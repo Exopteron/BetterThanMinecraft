@@ -31,6 +31,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // HINT: Message passing is god and it's optimised.
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const SERVER_CONSOLE_NAME: &str = "Server";
 mod chunks;
 pub mod classic;
 pub mod plugins;
@@ -53,6 +54,17 @@ pub struct AnticheatOptions {
   reach_distance: f64,
 }
 #[derive(serde_derive::Deserialize)]
+pub struct AutosaveOptions {
+  enabled: bool,
+  delay_in_seconds: u64,
+}
+#[derive(serde_derive::Deserialize)]
+pub struct RatelimitingOptions {
+  enabled: bool,
+  packet_threshold: u64,
+  time_in_ms: u64,
+}
+#[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
   authenticate_usernames: bool,
   do_heartbeat: bool,
@@ -66,6 +78,9 @@ pub struct ServerOptions {
   server_name: String,
   max_players: usize,
   motd: String,
+  chat_colour_perm_level: usize,
+  autosave: AutosaveOptions,
+  ratelimiting: RatelimitingOptions,
   anticheat: AnticheatOptions,
 }
 static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| {
@@ -126,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       permission_level: 5,
       entity: false,
       id: -69i8 as u32,
-      name: "Server".to_string(),
+      name: SERVER_CONSOLE_NAME.to_string(),
       message_send: console_send.clone(),
       supported_extensions: None,
     };
@@ -194,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>) -> Option<()> {
   let mut test = Box::pin(&mut stream);
   let spawn_position = gmts.get_spawnpos().await?;
-  let packet = ClassicPacketReader::read_packet_reader(&mut test)
+  let packet = ClassicPacketReader::read_packet_reader(&mut test, "unknown")
     .await
     .ok()?;
   let (msg_send, recv) = mpsc::channel::<PlayerCommand>(100);
@@ -306,7 +321,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       let (_, extcount) = if let classic::Packet::ExtInfo {
         appname,
         extension_count,
-      } = ClassicPacketReader::read_packet_reader(&mut test)
+      } = ClassicPacketReader::read_packet_reader(&mut test, &user_name)
         .await
         .ok()?
       {
@@ -317,7 +332,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
       let mut client_supported_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
       for _ in 0..extcount {
         let (extname, version) = if let classic::Packet::ExtEntry { extname, version } =
-          ClassicPacketReader::read_packet_reader(&mut test)
+          ClassicPacketReader::read_packet_reader(&mut test, &user_name)
             .await
             .ok()?
         {
@@ -637,7 +652,10 @@ async fn internal_inc_handler(
   let gmts = gmts.clone();
   let our_username = our_username.to_string();
   let packet_handler_wrapper = || async move {
+    use tokio::time::{Duration, Instant};
     //let mut stored_msg = String::new();
+    let mut packet_count = 0;
+    let mut time_counter = Instant::now();
     loop {
       match recv_2.try_recv() {
         Ok(_) => {
@@ -650,7 +668,11 @@ async fn internal_inc_handler(
       }
       //log::info!("Packet handler running for {}", our_username);
       let mut s_p_id = [0; 1];
-      let x = readhalf.peek(&mut s_p_id).await.ok();
+      let x = tokio::time::timeout(std::time::Duration::from_secs(5), readhalf.peek(&mut s_p_id)).await.ok();
+      if x.is_none() {
+        return None;
+      }
+      let x = x.unwrap().ok();
       if x.is_none() {
         return None;
       }
@@ -662,11 +684,28 @@ async fn internal_inc_handler(
         continue;
       };
       //println!("Started");
-      let packet = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf)).await;
+      let packet = tokio::time::timeout(std::time::Duration::from_secs(5), ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf), &our_username.clone())).await;
       if packet.is_err() {
         return None;
       }
       let packet = packet.unwrap();
+      if packet.is_err() {
+        return None;
+      }
+      let packet = packet.unwrap();
+      if CONFIGURATION.ratelimiting.enabled {
+        packet_count += 1;
+        if packet_count > CONFIGURATION.ratelimiting.packet_threshold && time_counter.elapsed() > Duration::from_millis(CONFIGURATION.ratelimiting.time_in_ms)  {
+          tokio::time::sleep_until(time_counter).await;
+          time_counter = Instant::now();
+          packet_count = 0;
+          continue;
+        }
+        if time_counter.elapsed() > Duration::from_millis(CONFIGURATION.ratelimiting.time_in_ms) {
+          time_counter = Instant::now();
+          packet_count = 0;
+        }
+      }
       match packet {
 /*         classic::Packet::PlayerClicked {
           button,
@@ -724,6 +763,16 @@ async fn internal_inc_handler(
             let mut prefix = format!("<{}> ", our_username);
             prefix.push_str(&message);
             let message = prefix;
+            let perm_level = if let Some(l) = gmts.get_permission_level(our_id as i8).await {
+              l
+            } else {
+              continue;
+            };
+            let can_color = match perm_level {
+              l if l < CONFIGURATION.chat_colour_perm_level => false,
+              _ => true,
+            };
+            let message = handle_mc_colours(&message, can_color);
             let message = message.as_bytes().to_vec();
             let message = message.chunks(64).collect::<Vec<&[u8]>>();
             let mut msg2 = vec![];
@@ -740,7 +789,10 @@ async fn internal_inc_handler(
           }
           //}
         }
-        _ => {}
+       _ => {
+          //log::error!("Bad packet id {}.", id);
+          return None;
+        }
       }
     }
   };
@@ -774,4 +826,18 @@ pub fn strip_mc_colorcodes(input: &str) -> String {
       true
   });
   return chars.into_iter().collect::<String>();
+}
+
+pub fn handle_mc_colours(input: &str, can_color: bool) -> String {
+  let mut input: String = input.chars().map(|c| {
+    let c = match c {
+      '%' => '&',
+      c => c,
+    };
+    c
+  }).collect();
+  if !can_color {
+    input = strip_mc_colorcodes(&input);
+  }
+  input
 }

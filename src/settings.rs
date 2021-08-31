@@ -54,6 +54,18 @@ server_name = "BetterThanMinecraft"
 max_players = 20
 # Message of the day.
 motd = "A BetterThanMinecraft server"
+# Permission level for chat colors.
+chat_colour_perm_level = 4
+
+# Autosave options. Default delay is 5 minutes.
+[autosave]
+enabled = true
+delay_in_seconds = 300
+
+[ratelimiting]
+enabled = true
+packet_threshold = 3
+time_in_ms = 50
 
 [anticheat]
 anti_speed_tp = true

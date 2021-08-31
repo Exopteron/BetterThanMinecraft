@@ -32,6 +32,42 @@ impl crate::game::Plugin for CoreUtils {
                     },
                 )
                 .await;
+                gmts.new_value(
+                    "Coreutils_ServerURL",
+                    GMTSElement {
+                        val: Arc::new(Box::new(random_server_salt())),
+                    },
+                )
+                .await;
+                if CONFIGURATION.autosave.enabled {
+                    let as_gmts = gmts.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            as_gmts.chat_to_permlevel(
+                                &format!("&d[{}: Starting world save..]", crate::SERVER_CONSOLE_NAME),
+                                -1,
+                                4,
+                            )
+                            .await;
+                            if let None = as_gmts.save_world().await {
+                                as_gmts.chat_to_permlevel(
+                                    &format!("&d[{}: Error saving the world.]", crate::SERVER_CONSOLE_NAME),
+                                    -1,
+                                    4,
+                                )
+                                .await;
+                                return 3;
+                            }
+                            as_gmts.chat_to_permlevel(
+                                &format!("&d[{}: Save complete.]", crate::SERVER_CONSOLE_NAME),
+                                -1,
+                                4,
+                            )
+                            .await;
+                            sleep(Duration::from_secs(CONFIGURATION.autosave.delay_in_seconds)).await;
+                        }
+                    });
+                }
                 if CONFIGURATION.do_heartbeat {
                     let hb_gmts = gmts.clone();
                     tokio::spawn(async move {
@@ -63,7 +99,7 @@ impl crate::game::Plugin for CoreUtils {
                                 true => "True",
                                 false => "False",
                             };
-                            let request = format!("GET /heartbeat.jsp?port={port}&max={maxplayers}&name={servername}&public={public}&version=7&salt={salt}&users={online}&software={software_ver} HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt, port = port, maxplayers = CONFIGURATION.max_players, servername = urlencoding::encode(&CONFIGURATION.server_name), online = online_players, public = public, software_ver = urlencoding::encode(&format!("BetterThanMinecraft v{}.", crate::VERSION)));
+                            let request = format!("GET /heartbeat.jsp?port={port}&max={maxplayers}&name={servername}&public={public}&version=7&salt={salt}&users={online}&software={software_ver} HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt, port = port, maxplayers = CONFIGURATION.max_players, servername = urlencoding::encode(&CONFIGURATION.server_name), online = online_players, public = public, software_ver = urlencoding::encode(&format!("BTM v{}.", crate::VERSION)));
                             extern crate native_tls;
                             use native_tls::TlsConnector;
                             let connector = TlsConnector::new().unwrap();
@@ -80,9 +116,18 @@ impl crate::game::Plugin for CoreUtils {
                                 sleep(Duration::from_secs(5)).await;
                                 continue;
                             }
+                            //let buf = buf.to_vec();
                             let buf = buf.split("\r\n").collect::<Vec<&str>>();
-                            let url = buf[buf.len() - 4];
-                            log::info!("Server URL: [{}]", url);
+                            let url = buf[buf.len() - 4].to_string().clone();
+                            let url2 = url.clone();
+                            hb_gmts.set_value(
+                                "Coreutils_ServerURL",
+                                GMTSElement {
+                                    val: Arc::new(Box::new(url2.clone())),
+                                },
+                            )
+                            .await;
+                            //log::info!("Server URL: [{}]", url);
 /*                             hb_gmts.set_value(
                                 "Coreutils_HeartbeatSalt",
                                 GMTSElement {
@@ -194,7 +239,7 @@ impl crate::game::Plugin for CoreUtils {
                             };
                             if let Some(last) = player_list.last() {
                                 let last = last.clone();
-                                player_list.remove(0);
+                                player_list.remove(player_list.len());
                                 let mut string = "&7List: ".to_string();
                                 for name in &player_list {
                                     string.push_str(&format!("&c{}&7, ", name));
@@ -372,6 +417,52 @@ impl crate::game::Plugin for CoreUtils {
             }),
         );
         pre_gmts.register_command(
+            "tpall".to_string(),
+            "(player)",
+            "Teleport everyone to player.",
+            Box::new(move |gmts, args, sender| {
+                Box::pin(async move {
+                    if let Some(p) = gmts.get_permission_level(sender).await {
+                        if p >= 4 {
+                            let our_name = if let Some(n) = gmts.get_username(sender).await {
+                                n
+                            } else {
+                                return 1;
+                            };
+                            if args.len() < 1 {
+                                return 1;
+                            }
+                            let id_a = if let Some(i) = gmts.get_id(args[0].to_string()).await {
+                                i
+                            } else {
+                                return 1;
+                            };
+                            let pos = if let Some(p) = gmts.get_position(id_a).await {
+                                p
+                            } else {
+                                return 3;
+                            };
+                            if let None = gmts.tp_all_pos(pos).await {
+                                return 3;
+                            }
+                            gmts.chat_to_permlevel(
+                                &format!(
+                                    "&d[{}: Teleporting everyone to {}]",
+                                    our_name, args[0]
+                                ),
+                                -1,
+                                4,
+                            )
+                            .await;
+                        }
+                    } else {
+                        return 3;
+                    };
+                    0
+                })
+            }),
+        );
+        pre_gmts.register_command(
             "tp".to_string(),
             "(player 1) (player 2)",
             "Teleport player 1 to player 2.",
@@ -414,6 +505,36 @@ impl crate::game::Plugin for CoreUtils {
                                 4,
                             )
                             .await;
+                        }
+                    } else {
+                        return 3;
+                    };
+                    0
+                })
+            }),
+        );
+        pre_gmts.register_command(
+            "url".to_string(),
+            "",
+            "Get the server URL",
+            Box::new(move |gmts, args, sender| {
+                Box::pin(async move {
+                    if let Some(p) = gmts.get_permission_level(sender).await {
+                        if p >= 1 {
+                            let x = if let Some(l) = gmts.get_value("Coreutils_ServerURL").await {
+                                l
+                            } else {
+                                //log::error!("URL get errr");
+                                return 3;
+                            };
+                            let url = if let Some(l) = x.val.downcast_ref::<String>() {
+                                l
+                            } else {
+                                //log::error!("Verify name error!");
+                                return 3;
+                            };
+                            gmts.chat_to_id(&format!("&7The server url is: &c{}", url), -1, sender).await;
+                            //gmts.chat_to_id(&format!("&f{}", CONFIGURATION.motd), -1, sender).await;
                         }
                     } else {
                         return 3;

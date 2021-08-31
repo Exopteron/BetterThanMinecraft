@@ -248,6 +248,15 @@ impl CMDGMTS {
             .await?;
         Some(())
     }
+    pub async fn tp_all_pos(&self, position: PlayerPosition) -> Option<()> {
+        self.send_pos_update_all(position.clone()).await;
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::PassMessageToAll { message: PlayerCommand::PlayerTeleport { position, id: -1}, res_send })
+            .ok()?;
+        res_recv.await.ok()?;
+        Some(())
+    }
     pub async fn msg_broadcast(&self, message: PlayerCommand) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -485,6 +494,16 @@ impl CMDGMTS {
             .send(PlayersCommand::PassMessageToAll { message, res_send })
             .ok()?;
         res_recv.await.ok()
+    }
+    pub async fn send_pos_update_all(&self, position: PlayerPosition) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::UpdatePositionAll {
+                position,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
     }
     pub async fn send_position_update(&self, id: i8, position: PlayerPosition) {
         let (res_send, res_recv) = oneshot::channel();
@@ -1244,6 +1263,26 @@ impl GMTS {
                             res_send.send(None).ok().expect(ERR_SENDING_RESULT);
                         }
                     }
+                    PlayersCommand::UpdatePositionAll {
+                        position,
+                        res_send,
+                    } => {
+                        let mut ids = vec![];
+                        for (id, player) in &mut players {
+                            player.data.position = Some(position.clone());
+                            ids.push(id.clone());
+                        }
+                            for id in ids {
+                                for player in &players {
+                                        if let None =
+                                            player.1.send_teleport(id as i8, &position).await
+                                        {
+    
+                                        }
+                                }
+                            }
+                            res_send.send(Some(())).expect(ERR_SENDING_RESULT);
+                    }
                     PlayersCommand::UpdatePosition {
                         my_id,
                         position,
@@ -1863,6 +1902,16 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn send_pos_update_all(&self, position: PlayerPosition) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::UpdatePositionAll {
+                position,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn send_position_update(&self, id: i8, position: PlayerPosition) -> Option<()> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -2102,6 +2151,10 @@ pub enum PlayersCommand {
     },
     UpdatePosition {
         my_id: u32,
+        position: PlayerPosition,
+        res_send: oneshot::Sender<Option<()>>,
+    },
+    UpdatePositionAll {
         position: PlayerPosition,
         res_send: oneshot::Sender<Option<()>>,
     },

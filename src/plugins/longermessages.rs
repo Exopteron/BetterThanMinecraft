@@ -55,7 +55,7 @@ impl crate::game::Plugin for LongerMessagesCPE {
         pre_gmts.register_packet_hook(0x0d, Box::new(|gmts, stream, packet_id, sender_id| {
             Box::pin(async move {
                 let mut stream = stream.lock().await;
-                if let crate::classic::Packet::MessageC { message, unused } = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream)).await.ok()? {
+                if let crate::classic::Packet::MessageC { message, unused } = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream), "g").await.ok()? {
                     let our_username = gmts.get_username(sender_id as i8).await?;
                     let our_id = sender_id;
                     if let Some(x) = gmts.get_supported_extensions(sender_id).await {
