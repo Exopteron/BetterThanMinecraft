@@ -44,6 +44,8 @@ world_file = "world.cw"
 listen_address = "0.0.0.0:25565"
 # Can admins join if the server is full?
 admin_slot = false
+# Amount of threads to use. Defaults to logical core count.
+# worker_threads = 8;
 # Do we show on the server list?
 public = true
 # Server name.
@@ -55,6 +57,7 @@ motd = "A BetterThanMinecraft server"
 
 [anticheat]
 anti_speed_tp = true
+reach_distance = 6.0
 "#;
 pub fn get_options() -> ServerOptions {
     Builder::new()

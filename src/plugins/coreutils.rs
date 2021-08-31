@@ -83,6 +83,13 @@ impl crate::game::Plugin for CoreUtils {
                             let buf = buf.split("\r\n").collect::<Vec<&str>>();
                             let url = buf[buf.len() - 4];
                             log::info!("Server URL: [{}]", url);
+/*                             hb_gmts.set_value(
+                                "Coreutils_HeartbeatSalt",
+                                GMTSElement {
+                                    val: Arc::new(Box::new(random_server_salt())),
+                                },
+                            )
+                            .await; */
                             sleep(Duration::from_secs(45)).await;
                         }
                     });
@@ -407,6 +414,24 @@ impl crate::game::Plugin for CoreUtils {
                                 4,
                             )
                             .await;
+                        }
+                    } else {
+                        return 3;
+                    };
+                    0
+                })
+            }),
+        );
+        pre_gmts.register_command(
+            "motd".to_string(),
+            "",
+            "Get the server MOTD",
+            Box::new(move |gmts, args, sender| {
+                Box::pin(async move {
+                    if let Some(p) = gmts.get_permission_level(sender).await {
+                        if p >= 1 {
+                            gmts.chat_to_id("&7Motd:", -1, sender).await;
+                            gmts.chat_to_id(&format!("&f{}", CONFIGURATION.motd), -1, sender).await;
                         }
                     } else {
                         return 3;

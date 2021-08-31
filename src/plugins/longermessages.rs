@@ -6,6 +6,7 @@ impl crate::game::Plugin for LongerMessagesCPE {
     fn initialize(pre_gmts: &mut PreGMTS) {
         pre_gmts.cpe_required(false);
         pre_gmts.register_extension("LongerMessages", 1, false);
+        pre_gmts.register_extension("CustomBlocks", 1, false);
         pre_gmts.register_ondisconnect_hook(Box::new(|gmts, id| {
             Box::pin(async move {
                 return Some(());
@@ -23,11 +24,27 @@ impl crate::game::Plugin for LongerMessagesCPE {
         }));
          pre_gmts.register_early_onconnect_hook(Box::new(|gmts, stream, v_token, id| {
             Box::pin(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let supported_extensions = if let Some(x) = gmts.get_supported_extensions(id).await {
                     x
                 } else {
                     return Some(());
                 };
+/*                 if supported_extensions.get("CustomBlocks").is_some() && supported_extensions.get("CustomBlocks").unwrap().version == 1 {
+                    let mut stream = stream.lock().await;
+                    let mut packet = vec![];
+                    packet.push(0x13);
+                    packet.push(0x01);
+                    stream.write(&packet).await.ok()?;
+                    let mut recv_packet = [0; 2];
+                    stream.read_exact(&mut recv_packet).await.ok()?;
+                    if recv_packet[0] != 0x13 {
+                        return None;
+                    }
+                    let their_level = recv_packet[1];
+                    let mutual_level = std::cmp::min(1, their_level);
+                    return Some(());
+                } */
                 if supported_extensions.get("LongerMessages").is_some() && supported_extensions.get("LongerMessages").unwrap().version == 1 {
                     let username = gmts.get_username(id).await?;
                     gmts.new_value(&format!("{}_LMChatbox", username), GMTSElement { val: Arc::new(Box::new(String::new())) }).await;

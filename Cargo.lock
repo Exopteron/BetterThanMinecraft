@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "BetterThanMinecraft"
-version = "0.2.1-alpha"
+version = "0.2.2-alpha"
 dependencies = [
  "base-62",
  "bytes",
@@ -19,6 +19,7 @@ dependencies = [
  "named-binary-tag",
  "native-tls",
  "num-integer",
+ "num_cpus",
  "once_cell",
  "perlin_noise",
  "rand 0.6.5",

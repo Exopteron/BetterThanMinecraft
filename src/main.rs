@@ -34,6 +34,7 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 mod chunks;
 pub mod classic;
 pub mod plugins;
+use tokio::runtime::Builder;
 use classic::*;
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
@@ -49,6 +50,7 @@ use game::*;
 #[derive(serde_derive::Deserialize)]
 pub struct AnticheatOptions {
   anti_speed_tp: bool,
+  reach_distance: f64,
 }
 #[derive(serde_derive::Deserialize)]
 pub struct ServerOptions {
@@ -59,6 +61,7 @@ pub struct ServerOptions {
   listen_address: String,
   world_file: String,
   admin_slot: bool,
+  worker_threads: Option<usize>,
   public: bool,
   server_name: String,
   max_players: usize,
@@ -68,104 +71,125 @@ pub struct ServerOptions {
 static CONFIGURATION: Lazy<ServerOptions> = Lazy::new(|| {
   let mut x = settings::get_options();
   x.max_players = std::cmp::min(x.max_players, 127);
+  if x.worker_threads.is_none() {
+    x.worker_threads = Some(num_cpus::get());
+  }
   x
 });
-#[tokio::main(worker_threads = 4)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let mut pregmts = PreGMTS::new();
-  pregmts.register_command(
-    "ver".to_string(),
-    "",
-    "Get server version",
-    Box::new(|gmts, _, sender| {
-      Box::pin(async move {
-        gmts
-          .chat_to_id(
-            &format!("&aServer is running BetterThanMinecraft v{}.", VERSION),
-            -1,
-            sender,
-          )
-          .await;
-        0
-      })
-    }),
-  );
+//#[tokio::main(worker_threads = CONFIGURATION.worker_threads)]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
   if CONFIGURATION.public {}
-  settings::get_whitelist();
-  settings::get_ops();
-  settings::get_banlist();
   log::info!("Starting BetterThanMinecraft v{}.", VERSION);
-  plugins::coreutils::CoreUtils::initialize(&mut pregmts);
-  //plugins::anticheat::Anticheat::initialize(&mut pregmts);
-  //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
-  //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
-  let gmts = GMTS::setup(pregmts).await;
-  let gmts = Arc::new(gmts);
-  let data = PlayerData { position: None };
-  let (console_send, console_recv) = mpsc::channel::<PlayerCommand>(1000);
-  let player = Player {
-    data: data,
-    op: true,
-    permission_level: 5,
-    entity: false,
-    id: -69i8 as u32,
-    name: "Server".to_string(),
-    message_send: console_send.clone(),
-    supported_extensions: None,
+  let runtime = match Builder::new_multi_thread().worker_threads(CONFIGURATION.worker_threads.unwrap()).thread_name("server-thread-pool").enable_all().build() {
+    Ok(rt) => {
+      log::info!("Setting up multithreaded runtime with {} threads.", CONFIGURATION.worker_threads.unwrap());
+      rt
+    },
+    Err(e) => {
+      log::error!("An error occured setting up the tokio runtime. Details: {:?}", e);
+      std::process::exit(1);
+    }
   };
-  gmts.register_user(player).await.unwrap();
-  let cgmts_1 = gmts.clone();
-/*   tokio::spawn(async move {
-    use tokio_read_line::{ReadLines, Result};
-    let mut lines = ReadLines::new().unwrap();
-    loop {
-      use std::io::Write;
-      print!("> ");
-      std::io::stdout().flush();
-      let command = if let Some(l) = lines.next().await.ok() {
-        l
-      } else {
-        log::error!("Stdin error.");
-        continue;
-      };
-      let command = command.trim().to_string();
-      cgmts_1
-        .execute_command(-69, format!("/{}", command))
-        .await
-        .unwrap();
-    }
-  }); */
-/*   tokio::spawn(async move {
-    loop {
-      if let Some(msg) = console_recv.recv().await {
-        match msg {
-/*           PlayerCommand::Message { id, message } => {
-            //log::info!("[MESSAGE TO CONSOLE] {}", message);
-          } */
-          _ => {}
-        }
-      }
-    }
-  }); */
-  // Pass around immutable references, and clone the sender.
-
-  //example(&gmts);
-
-  let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
-  log::info!("Server listening on {}", CONFIGURATION.listen_address);
-  loop {
-    let possible = listener.accept().await;
-    if possible.is_err() {
-      continue;
-    }
-    let (stream, _) = possible.unwrap();
-    let gmts = gmts.clone();
-    tokio::task::spawn(async move {
-      if let None = new_incoming_connection_handler(stream, gmts).await {
-        log::error!("Player join error!");
+  let mt = runtime.block_on(async {
+    let mut pregmts = PreGMTS::new();
+    pregmts.register_command(
+      "ver".to_string(),
+      "",
+      "Get server version",
+      Box::new(|gmts, _, sender| {
+        Box::pin(async move {
+          gmts
+            .chat_to_id(
+              &format!("&aServer is running BetterThanMinecraft v{}.", VERSION),
+              -1,
+              sender,
+            )
+            .await;
+          0
+        })
+      }),
+    );
+    settings::get_whitelist();
+    settings::get_ops();
+    settings::get_banlist();
+    plugins::coreutils::CoreUtils::initialize(&mut pregmts);
+    //plugins::anticheat::Anticheat::initialize(&mut pregmts);
+    //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
+    //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
+    let gmts = GMTS::setup(pregmts).await;
+    let gmts = Arc::new(gmts);
+    let data = PlayerData { position: None };
+    let (console_send, mut console_recv) = mpsc::channel::<PlayerCommand>(1000);
+    let player = Player {
+      data: data,
+      op: true,
+      permission_level: 5,
+      entity: false,
+      id: -69i8 as u32,
+      name: "Server".to_string(),
+      message_send: console_send.clone(),
+      supported_extensions: None,
+    };
+    gmts.register_user(player).await.unwrap();
+    let cgmts_1 = gmts.clone();
+     tokio::spawn(async move {
+      use tokio_read_line::{ReadLines, Result};
+      //let mut lines = ReadLines::new().unwrap();
+      loop {
+        use std::io::Write;
+         print!("> ");
+        std::io::stdout().flush();
+  /*
+        let command = if let Some(l) = lines.next().await.ok() {
+          l
+        } else {
+          log::error!("Stdin error.");
+          continue;
+        }; */
+        let mut command = String::new();
+        std::io::stdin().read_line(&mut command);
+        let command = command.trim().to_string();
+        cgmts_1
+          .execute_command(-69, format!("/{}", command))
+          .await
+          .unwrap();
       }
     });
-  }
+    tokio::spawn(async move {
+      loop {
+        if let Some(msg) = console_recv.recv().await {
+          match msg {
+  /*           PlayerCommand::Message { id, message } => {
+              //log::info!("[MESSAGE TO CONSOLE] {}", message);
+            } */
+            _ => {}
+          }
+        }
+      }
+    });
+    // Pass around immutable references, and clone the sender.
+  
+    //example(&gmts);
+  
+    let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
+    log::info!("Server listening on {}", CONFIGURATION.listen_address);
+    loop {
+      let possible = listener.accept().await;
+      if possible.is_err() {
+        continue;
+      }
+      let (stream, _) = possible.unwrap();
+      let gmts = gmts.clone();
+      tokio::task::spawn(async move {
+        if let None = new_incoming_connection_handler(stream, gmts).await {
+          log::error!("Player join error!");
+        }
+      });
+    }
+    return Ok::<(), Box<dyn std::error::Error>>(());
+  });
+  mt.unwrap();
+  Ok(())
 }
 async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>) -> Option<()> {
   let mut test = Box::pin(&mut stream);

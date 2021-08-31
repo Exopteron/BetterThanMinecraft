@@ -59,5 +59,24 @@ impl crate::game::Plugin for Anticheat {
                 })
             }),
         );
+
+        pre_gmts.register_setblock_hook(Box::new(|gmts, block, sender_id| {
+            Box::pin(async move {
+                if let Some(p) = gmts.get_permission_level(sender_id as i8).await {
+                    if p < 4 {
+                        let last_position = gmts.get_position(sender_id as i8).await?;
+                        let distance = last_position.distance_to(block.position.clone());
+                        if distance > CONFIGURATION.anticheat.reach_distance {
+                            return None;
+                        }
+                        return Some((block, sender_id));
+                    } else {
+                        return Some((block, sender_id));
+                    }
+                } else {
+                    return None;
+                }
+            })
+        }));
     }
 }

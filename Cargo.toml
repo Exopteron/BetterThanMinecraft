@@ -1,7 +1,7 @@
  
 [package]
 name = "BetterThanMinecraft"
-version = "0.2.1-alpha"
+version = "0.2.2-alpha"
 authors = ["Galaxtone", "Exopteron"]
 edition = "2018"
 description = "An experimental classicube server."
@@ -34,3 +34,4 @@ hex = "0.4.3"
 md-5 = "0.9.1"
 futures = "0.3.16"
 tokio-read-line = "0.1.0"
+num_cpus = "1.13.0"

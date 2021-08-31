@@ -243,6 +243,7 @@ pub struct CMDGMTS {
 }
 impl CMDGMTS {
     pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
+        self.send_position_update(id, position).await;
         self.message_to_id(PlayerCommand::PlayerTeleport { position, id: -1 }, id)
             .await?;
         Some(())
@@ -1206,7 +1207,11 @@ impl GMTS {
                         res_send.send(players_names).expect(ERR_SENDING_RESULT);
                     }
                     PlayersCommand::OnlinePlayerCount { res_send } => {
-                        res_send.send(players.len() - 1).expect(ERR_SENDING_RESULT);
+                        if players.len() > 0 {
+                            res_send.send(players.len() - 1).expect(ERR_SENDING_RESULT);
+                        } else {
+                            res_send.send(players.len()).expect(ERR_SENDING_RESULT);
+                        }
                     }
                     PlayersCommand::SetPermissionLevel {
                         id,
@@ -1253,11 +1258,11 @@ impl GMTS {
                                     if let None =
                                         player.1.send_teleport(my_id as i8, &position).await
                                     {
-                                        log::error!(
+/*                                         log::error!(
                                             "Error sending teleport of entity {} to position {:?}",
                                             my_id as i8,
                                             position
-                                        );
+                                        ); */
                                     }
                                 }
                             }
@@ -1506,6 +1511,7 @@ impl GMTS {
     }
     //    pub extensions: HashMap<String, CPEExtensionData>,
     pub async fn tp_id_pos(&self, id: i8, position: PlayerPosition) -> Option<()> {
+        self.send_position_update(id, position).await;
         self.message_to_id(
             PlayerCommand::PlayerTeleport {
                 position: position.clone(),
@@ -1514,7 +1520,6 @@ impl GMTS {
             id,
         )
         .await?;
-        self.send_position_update(id, position).await;
         Some(())
     }
     pub async fn msg_broadcast(&self, message: PlayerCommand) -> Option<()> {
