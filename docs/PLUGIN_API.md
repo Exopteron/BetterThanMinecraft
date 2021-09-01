@@ -1,5 +1,7 @@
 # Lua Plugin API
+Documentation for my experimental Lua Plugin API.
 
+# Command documentation:
 Example command:
 ```lua
 register_command("luasay", "(message)", "Send a message from lua!", string.format([[
