@@ -133,6 +133,7 @@ impl crate::game::Plugin for EpicPlugin {
                             let mut in_lua_cmds = vec![];
                             let handle = handle.clone();
                             lua.context(|lua_ctx| {
+                                let handle2 = handle.clone();
                                 let globals = lua_ctx.globals();
                                 let args_table = lua_ctx.create_table().unwrap();
                                 let mut iternum = 1;
@@ -146,38 +147,101 @@ impl crate::game::Plugin for EpicPlugin {
                                 globals.set("return_number", 0).unwrap();
                                 globals.set("sender_id", sender).unwrap();
                                 globals.set("chat", ChatModule {}).unwrap();
+                                let handle = handle2.clone();
+                                let handle2 = handle2.clone();
+                                let gmts2 = gmts.clone();
                                 let chat_broadcast = lua_ctx
-                                    .create_function(|lua_ctx, (text): (String)| {
-                                        let globals = lua_ctx.globals();
+                                    .create_function(move |lua_ctx, (text): (String)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        handle.block_on(async move {
+                                            gmts.chat_broadcast(&text, -1).await
+                                        });
+/*                                         let globals = lua_ctx.globals();
                                         let lua_cmds: rlua::Table =
                                             globals.get("lua_cmds").unwrap();
                                         let len = lua_cmds.len().unwrap();
                                         lua_cmds
                                             .set(len + 1, InLuaCommand::ChatBroadcast { text })
                                             .unwrap();
-                                        //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text });
+                                        //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text }); */
                                         Ok(())
                                     })
                                     .unwrap();
                                 globals.set("chat_broadcast", chat_broadcast).unwrap();
+
+                                let handle = handle.clone();
+                                let handle2 = handle.clone();
+                                let gmts2 = gmts.clone();
+                                let teleport_id = lua_ctx
+                                    .create_function(move |lua_ctx, (x, y, z, id): (i16, i16, i16, i8)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        handle.block_on(async move {
+                                            gmts.tp_id_pos(id, PlayerPosition::from_pos(x as u16, y as u16, z as u16)).await
+                                        });
+/*                                         let globals = lua_ctx.globals();
+                                        let lua_cmds: rlua::Table =
+                                            globals.get("lua_cmds").unwrap();
+                                        let len = lua_cmds.len().unwrap();
+                                        lua_cmds
+                                            .set(len + 1, InLuaCommand::ChatBroadcast { text })
+                                            .unwrap();
+                                        //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text }); */
+                                        Ok(())
+                                    })
+                                    .unwrap();
+                                globals.set("teleport_id_pos", teleport_id).unwrap();
+
+
+                                let handle2 = handle.clone();
+                                let gmts2 = gmts.clone();
                                 let chat_to_id = lua_ctx
-                                    .create_function(|lua_ctx, (id, text): (i8, String)| {
-                                        let globals = lua_ctx.globals();
+                                    .create_function(move |lua_ctx, (id, text): (i8, String)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        handle.block_on(async move {
+                                            gmts.chat_to_id(&text, -1, id).await
+                                        });
+
+/*                                         let globals = lua_ctx.globals();
                                         let lua_cmds: rlua::Table =
                                             globals.get("lua_cmds").unwrap();
                                         let len = lua_cmds.len().unwrap();
                                         lua_cmds
                                             .set(len + 1, InLuaCommand::ChatToID { id, text })
-                                            .unwrap();
+                                            .unwrap(); */
                                         //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text });
                                         Ok(())
                                     })
                                     .unwrap();
                                 globals.set("chat_to_id", chat_to_id).unwrap();
+                                let handle2 = handle.clone();
+                                let gmts2 = gmts.clone();
                                 let set_block = lua_ctx
                                     .create_function(
-                                        |lua_ctx, (x, y, z, id): (i16, i16, i16, u8)| {
-                                            let globals = lua_ctx.globals();
+                                        move |lua_ctx, (x, y, z, id): (i16, i16, i16, u8)| {
+                                            let handle = handle2.clone();
+                                            let gmts = gmts2.clone();
+                                            let gmts = gmts.clone();
+                                            handle.block_on(async move {
+                                                gmts.set_block(
+                                                    Block {
+                                                        position: BlockPosition {
+                                                            x: x as usize,
+                                                            y: y as usize,
+                                                            z: z as usize,
+                                                        },
+                                                        id,
+                                                    },
+                                                    -69,
+                                                )
+                                                .await;
+                                            });
+/*                                             let globals = lua_ctx.globals();
                                             let lua_cmds: rlua::Table =
                                                 globals.get("lua_cmds").unwrap();
                                             let len = lua_cmds.len().unwrap();
@@ -187,7 +251,7 @@ impl crate::game::Plugin for EpicPlugin {
                                                     InLuaCommand::SetBlock { x, y, z, id },
                                                 )
                                                 .unwrap();
-                                            //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text });
+                                            //in_lua_cmds.push(InLuaCommand::ChatBroadcast { text }); */
                                             Ok(())
                                         },
                                     )

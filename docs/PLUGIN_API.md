@@ -35,6 +35,7 @@ get_block(x: i16, y: i16, z: i16) => u8 - Get a block ID from coordinates.
 get_username(id: i8) => string - Get the username corresponding to an ID.
 get_id(username: string) => i8 - Get the ID corresponding to a username.
 get_perm_level(id: i8) => usize - Get the permission level of an ID.
+teleport_id_pos(x: i16, y: i16, z: i16, id: i8) - Teleport an ID to a position.
 ```
 Global variables accessible within a registered command:
 ```
