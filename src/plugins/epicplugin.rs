@@ -219,6 +219,101 @@ impl crate::game::Plugin for EpicPlugin {
                                     })
                                     .unwrap();
                                 globals.set("get_username", get_username).unwrap();
+
+
+
+
+
+
+                                let gmts2 = gmts.clone();
+                                let handle2 = handle.clone();
+                                let get_id = lua_ctx
+                                    .create_function(move |_ctx, (username): (String)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        let (tx, mut rx) = tokio::sync::oneshot::channel();
+                                        handle.block_on(async move {
+                                            tx.send(gmts.get_id(username).await).unwrap();
+                                        });
+
+                                        let id: i8; //= gmts.get_username(id).await.unwrap();
+                                        loop {
+                                            let x = match rx.try_recv() {
+                                                Ok(v) => v,
+                                                Err(_) => {
+                                                    continue;
+                                                }
+                                            };
+                                            id = x.unwrap();
+                                            break;
+                                        }
+                                        return Ok(id);
+                                    })
+                                    .unwrap();
+                                globals.set("get_id", get_id).unwrap();
+
+
+
+
+                                let gmts2 = gmts.clone();
+                                let handle2 = handle.clone();
+                                let get_perm_level = lua_ctx
+                                    .create_function(move |_ctx, (id): (i8)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        let (tx, mut rx) = tokio::sync::oneshot::channel();
+                                        handle.block_on(async move {
+                                            tx.send(gmts.get_permission_level(id).await).unwrap();
+                                        });
+
+                                        let p_level: usize; //= gmts.get_username(id).await.unwrap();
+                                        loop {
+                                            let x = match rx.try_recv() {
+                                                Ok(v) => v,
+                                                Err(_) => {
+                                                    continue;
+                                                }
+                                            };
+                                            p_level = x.unwrap();
+                                            break;
+                                        }
+                                        return Ok(p_level);
+                                    })
+                                    .unwrap();
+                                globals.set("get_perm_level", get_perm_level).unwrap();
+
+
+                                let handle2 = handle.clone();
+                                let gmts2 = gmts.clone();
+                                let get_block = lua_ctx
+                                    .create_function(move |_ctx, (x, y, z): (i16, i16, i16)| {
+                                        let handle = handle2.clone();
+                                        let gmts = gmts2.clone();
+                                        let gmts = gmts.clone();
+                                        let (tx, mut rx) = tokio::sync::oneshot::channel();
+                                        handle.block_on(async move {
+                                            tx.send(gmts.get_block(BlockPosition {x: x as usize, y: y as usize, z: z as usize}).await).unwrap();
+                                        });
+
+                                        let block: Block; //= gmts.get_username(id).await.unwrap();
+                                        loop {
+                                            let x = match rx.try_recv() {
+                                                Ok(v) => v,
+                                                Err(_) => {
+                                                    continue;
+                                                }
+                                            };
+                                            block = x.unwrap();
+                                            break;
+                                        }
+                                        return Ok(block.id);
+                                    })
+                                    .unwrap();
+                                globals.set("get_block", get_block).unwrap();
+
+
                                 globals.set("set_block", set_block).unwrap();
                                 //let gmts = gmts.clone();
                                 /*                             lua_ctx.scope(|scope| {

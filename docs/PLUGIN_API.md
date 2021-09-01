@@ -22,7 +22,10 @@ Functions usable within a registered command:
 chat_broadcast(msg: string) - Broadcast a chat message
 chat_to_id(id: i8, msg: string) - Send a chat message to an ID.
 set_block(x: i16, y: i16, z: i16, id: u8) - Set a block in the world.
+get_block(x: i16, y: i16, z: i16) => u8 - Get a block ID from coordinates.
 get_username(id: i8) => string - Get the username corresponding to an ID.
+get_id(username: string) => i8 - Get the ID corresponding to a username.
+get_perm_level(id: i8) => usize - Get the permission level of an ID.
 ```
 Global variables accessible within a registered command:
 ```
