@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
+use tokio::task;
 // Constants for use, probably temporary as runtime ability to get block name will be needed in the future.
 pub type BlockId = u8;
 pub const ERR_SENDING_RESULT: &str = "Error sending result";
@@ -126,6 +127,7 @@ pub struct Block {
 
 pub struct PlayerData {
     pub position: Option<PlayerPosition>,
+    pub held_block: Option<u8>,
 }
 pub struct Player {
     pub data: PlayerData,
@@ -246,6 +248,15 @@ impl CMDGMTS {
         self.send_position_update(id, position).await;
         self.message_to_id(PlayerCommand::PlayerTeleport { position, id: -1 }, id)
             .await?;
+        Some(())
+    }
+    pub async fn update_held_block(&self, id: i8, block: u8, prevent_change: bool) -> Option<()> {
+        let mut bytes = vec![];
+        bytes.push(0x14);
+        bytes.push(block);
+        bytes.push(prevent_change as u8);
+        self.message_to_id(PlayerCommand::RawPacket { bytes }, id)
+        .await?;
         Some(())
     }
     pub async fn tp_all_pos(&self, position: PlayerPosition) -> Option<()> {
@@ -382,6 +393,16 @@ impl CMDGMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn get_held_block(&self, id: i8) -> Option<u8> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetHeldBlock {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -391,6 +412,28 @@ impl CMDGMTS {
             })
             .ok()?;
         res_recv.await.ok()?
+    }
+    pub fn get_username_blocking(&self, id: i8) -> Option<String> {
+        let (res_send, mut res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetUsername {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        let x: Option<String>;
+        loop {
+            let a = match res_recv.try_recv() {
+                Ok(v) => v,
+                Err(_) => {
+                    std::thread::yield_now();
+                    continue;
+                }
+            };
+            x = a;
+            break;
+        }
+        x
     }
     pub async fn get_username(&self, id: i8) -> Option<String> {
         let (res_send, res_recv) = oneshot::channel();
@@ -684,8 +727,61 @@ pub struct Command {
             + Sync,
     >,
 }
+#[derive(Clone)]
+pub enum CPEExtension {
+    CustomBlocks { enabled: bool, support_level: u8 },
+    HeldBlock { enabled: bool },
+}
+#[derive(Clone)]
+pub struct CPEHandler {
+    pub extensions: Vec<CPEExtension>,
+}
+impl CPEHandler {
+    pub fn new() -> Self {
+        Self { extensions: Vec::new() }
+    }
+    pub fn custom_block_support_level(&mut self, level: u8) {
+        self.insert_extension(CPEExtension::CustomBlocks { enabled: true, support_level: level});
+    }
+    pub fn heldblock_support(&mut self) {
+        self.insert_extension(CPEExtension::HeldBlock { enabled: true});
+    }
+    fn insert_extension(&mut self, extension: CPEExtension) {
+        match extension {
+            CPEExtension::CustomBlocks { .. } => {
+                self.extensions.retain(|ext| {
+                    match ext {
+                        CPEExtension::CustomBlocks { .. } => {
+                            return false;
+                        }
+                        _ => {
+
+                        }
+                    }
+                    return true;
+                });
+                self.extensions.push(extension);
+            }
+            CPEExtension::HeldBlock { .. } => {
+                self.extensions.retain(|ext| {
+                    match ext {
+                        CPEExtension::HeldBlock { .. } => {
+                            return false;
+                        }
+                        _ => {
+
+                        }
+                    }
+                    return true;
+                });
+                self.extensions.push(extension);
+            }
+        }
+    }
+}
 pub struct PreGMTS {
     pub commands: HashMap<String, Command>,
+    pub cpe_handler: CPEHandler,
     pub pmta_hooks: Vec<
         Box<
             dyn Fn(
@@ -761,6 +857,7 @@ impl PreGMTS {
     pub fn new() -> Self {
         return Self {
             commands: HashMap::new(),
+            cpe_handler: CPEHandler::new(),
             pmta_hooks: Vec::new(),
             getblock_hooks: Vec::new(),
             setblock_hooks: Vec::new(),
@@ -1027,7 +1124,11 @@ impl GMTS {
                     }
                     WorldCommand::SaveWorld { res_send } => {
                         log::info!("Saving world");
-                        res_send.send(world.save()).expect(ERR_SENDING_RESULT);
+                        let world2 = world.clone();
+                        tokio::task::spawn_blocking(move || {
+                            world2.save();
+                        });
+                        res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                     }
                     WorldCommand::SetBlockP {
                         mut block,
@@ -1283,6 +1384,18 @@ impl GMTS {
                             }
                             res_send.send(Some(())).expect(ERR_SENDING_RESULT);
                     }
+                    PlayersCommand::UpdateHeldBlock {
+                        my_id,
+                        block,
+                        res_send,
+                    } => {
+                        if let Some(us) = players.get_mut(&my_id) {
+                            us.data.held_block = Some(block);
+                            res_send.send(Some(())).expect(ERR_SENDING_RESULT);
+                        } else {
+                            res_send.send(None).expect(ERR_SENDING_RESULT);
+                        }
+                    }
                     PlayersCommand::UpdatePosition {
                         my_id,
                         position,
@@ -1314,6 +1427,15 @@ impl GMTS {
                         if let Some(user) = players.get(&id) {
                             res_send
                                 .send(Some(user.name.clone()))
+                                .expect(ERR_SENDING_RESULT);
+                        } else {
+                            res_send.send(None).expect(ERR_SENDING_RESULT);
+                        }
+                    }
+                    PlayersCommand::GetHeldBlock { id, res_send } => {
+                        if let Some(user) = players.get(&id) {
+                            res_send
+                                .send(user.data.held_block.clone())
                                 .expect(ERR_SENDING_RESULT);
                         } else {
                             res_send.send(None).expect(ERR_SENDING_RESULT);
@@ -1882,6 +2004,16 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
+    pub async fn get_held_block(&self, id: i8) -> Option<u8> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetHeldBlock {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
     pub async fn get_position(&self, id: i8) -> Option<PlayerPosition> {
         let (res_send, res_recv) = oneshot::channel();
         self.players_send
@@ -1891,6 +2023,28 @@ impl GMTS {
             })
             .ok()?;
         res_recv.await.ok()?
+    }
+    pub fn get_username_blocking(&self, id: i8) -> Option<String> {
+        let (res_send, mut res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::GetUsername {
+                id: id as u32,
+                res_send,
+            })
+            .ok()?;
+        let x: Option<String>;
+        loop {
+            let a = match res_recv.try_recv() {
+                Ok(v) => v,
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    continue;
+                }
+            };
+            x = a;
+            break;
+        }
+        x
     }
     pub async fn get_username(&self, id: i8) -> Option<String> {
         let (res_send, res_recv) = oneshot::channel();
@@ -1907,6 +2061,17 @@ impl GMTS {
         self.players_send
             .send(PlayersCommand::UpdatePositionAll {
                 position,
+                res_send,
+            })
+            .ok()?;
+        res_recv.await.ok()?
+    }
+    pub async fn send_hb_update(&self, id: i8, block: u8) -> Option<()> {
+        let (res_send, res_recv) = oneshot::channel();
+        self.players_send
+            .send(PlayersCommand::UpdateHeldBlock {
+                my_id: id as u32,
+                block,
                 res_send,
             })
             .ok()?;
@@ -2154,6 +2319,11 @@ pub enum PlayersCommand {
         position: PlayerPosition,
         res_send: oneshot::Sender<Option<()>>,
     },
+    UpdateHeldBlock {
+        my_id: u32,
+        block: u8,
+        res_send: oneshot::Sender<Option<()>>,
+    },
     UpdatePositionAll {
         position: PlayerPosition,
         res_send: oneshot::Sender<Option<()>>,
@@ -2168,6 +2338,10 @@ pub enum PlayersCommand {
     GetPosition {
         id: u32,
         res_send: oneshot::Sender<Option<PlayerPosition>>,
+    },
+    GetHeldBlock {
+        id: u32,
+        res_send: oneshot::Sender<Option<u8>>,
     },
     GetUsername {
         id: u32,

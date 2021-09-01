@@ -26,6 +26,7 @@ use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::{BytesMut};
+use tokio::task;
 #[derive(Clone)]
 pub struct World {
   data: BytesMut, // XZY
@@ -193,15 +194,22 @@ impl World {
         let mut data = self.data();
         let (mut reader, counter) = CountingReader::new(&mut data);
         let string = vec!['g' as u8; 12];
+        task::yield_now().await;
         let mut encoder = GzBuilder::new().comment(string).read(&mut reader, Compression::fast());
+        task::yield_now().await;
         let serialized = ClassicPacketWriter::serialize(LevelInitialize).unwrap();
         writer.write_all(&serialized).await?;
         loop {
+          task::yield_now().await;
           let mut x = [0; 1024];
+          task::yield_now().await;
           let res = encoder.read_exact(&mut x);
+          task::yield_now().await;
           if res.is_err() {
             let mut chunk_data = vec![];
+            task::yield_now().await;
             encoder.read_to_end(&mut chunk_data)?;
+            task::yield_now().await;
             //println!("Reader: {:?}", counter.load(Ordering::SeqCst));
             if chunk_data.len() == 0 {
               let serialized = ClassicPacketWriter::serialize(LevelFinalize { width: self.width, height: self.height, length: self.length}).unwrap();
@@ -212,6 +220,7 @@ impl World {
             let len = chunk_data.len();
             let serialized = ClassicPacketWriter::serialize(LevelDataChunk { chunk_length: len as i16, chunk_data, percent_complete: 255}).unwrap();
             writer.write_all(&serialized).await?;
+            task::yield_now().await;
           } else {
             let count = counter.load(Ordering::SeqCst);
             //println!("Reader: {:?}", count);
@@ -222,6 +231,7 @@ impl World {
               percent_complete: (count * 255 / len) as u8,
             }).unwrap();
             writer.write_all(&serialized).await?;
+            task::yield_now().await;
           }
         }
       }

@@ -128,12 +128,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     settings::get_ops();
     settings::get_banlist();
     plugins::coreutils::CoreUtils::initialize(&mut pregmts);
-    plugins::anticheat::Anticheat::initialize(&mut pregmts);
+    plugins::PluginManager::initialize(&mut pregmts);
+    plugins::cpe::CPESupporter::initialize(&mut pregmts);
+    //plugins::anticheat::Anticheat::initialize(&mut pregmts);
     //plugins::longermessages::LongerMessagesCPE::initialize(&mut pregmts);
     //plugins::testplugin::TestPlugin::initialize(&mut pregmts);
     let gmts = GMTS::setup(pregmts).await;
     let gmts = Arc::new(gmts);
-    let data = PlayerData { position: None };
+    let data = PlayerData { position: None, held_block: None };
     let (console_send, mut console_recv) = mpsc::channel::<PlayerCommand>(1000);
     let player = Player {
       data: data,
@@ -151,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       use tokio_read_line::{ReadLines, Result};
       //let mut lines = ReadLines::new().unwrap();
       loop {
+        tokio::task::yield_now().await;
         use std::io::Write;
          print!("> ");
         std::io::stdout().flush();
@@ -172,6 +175,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     tokio::spawn(async move {
       loop {
+        tokio::task::yield_now().await;
         if let Some(msg) = console_recv.recv().await {
           match msg {
   /*           PlayerCommand::Message { id, message } => {
@@ -280,6 +284,7 @@ async fn new_incoming_connection_handler(mut stream: TcpStream, gmts: Arc<GMTS>)
     let our_id = gmts.get_unused_id().await?;
     let data = PlayerData {
       position: Some(spawn_position.clone()),
+      held_block: None,
     };
     let mut permission_level: usize;
     let mut op: bool;
@@ -668,7 +673,9 @@ async fn internal_inc_handler(
       }
       //log::info!("Packet handler running for {}", our_username);
       let mut s_p_id = [0; 1];
+      tokio::task::yield_now().await;
       let x = tokio::time::timeout(std::time::Duration::from_secs(5), readhalf.peek(&mut s_p_id)).await.ok();
+      tokio::task::yield_now().await;
       if x.is_none() {
         return None;
       }
@@ -681,10 +688,13 @@ async fn internal_inc_handler(
         let readhalf_2 = std::sync::Arc::new(tokio::sync::Mutex::new(readhalf));
         hook(gmts.clone(), readhalf_2.clone(), s_p_id[0], our_id as i8).await;
         readhalf = std::sync::Arc::try_unwrap(readhalf_2).ok()?.into_inner();
+        tokio::task::yield_now().await;
         continue;
       };
+      tokio::task::yield_now().await;
       //println!("Started");
       let packet = tokio::time::timeout(std::time::Duration::from_secs(5), ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut readhalf), &our_username.clone())).await;
+      tokio::task::yield_now().await;
       if packet.is_err() {
         return None;
       }
@@ -752,7 +762,8 @@ async fn internal_inc_handler(
             }
           }
         }
-        classic::Packet::PositionAndOrientationC { position, .. } => {
+        classic::Packet::PositionAndOrientationC { player_id, position } => {
+          gmts.send_hb_update(our_id as i8, player_id).await;
           gmts.send_position_update(our_id as i8, position).await;
         }
         classic::Packet::MessageC { message, .. } => {
@@ -840,4 +851,18 @@ pub fn handle_mc_colours(input: &str, can_color: bool) -> String {
     input = strip_mc_colorcodes(&input);
   }
   input
+}
+
+fn equal_half(input: usize) -> (usize, usize) {
+  let x = input as f64 / 2.0;
+  let x1: usize;
+  let x2: usize;
+  if x % 1.0 != 0.0 {
+    x1 = (x - 0.5) as usize;
+    x2 = (x + 0.5) as usize;
+  } else {
+    x1 = x as usize;
+    x2 = x as usize;
+  }
+  (x1, x2)
 }

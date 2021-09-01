@@ -43,6 +43,7 @@ impl crate::game::Plugin for CoreUtils {
                     let as_gmts = gmts.clone();
                     tokio::spawn(async move {
                         loop {
+                            sleep(Duration::from_secs(CONFIGURATION.autosave.delay_in_seconds)).await;
                             as_gmts.chat_to_permlevel(
                                 &format!("&d[{}: Starting world save..]", crate::SERVER_CONSOLE_NAME),
                                 -1,
@@ -64,7 +65,6 @@ impl crate::game::Plugin for CoreUtils {
                                 4,
                             )
                             .await;
-                            sleep(Duration::from_secs(CONFIGURATION.autosave.delay_in_seconds)).await;
                         }
                     });
                 }
@@ -568,8 +568,7 @@ impl crate::game::Plugin for CoreUtils {
             Box::new(move |gmts, args, sender| {
                 Box::pin(async move {
                     if let Some(p) = gmts.get_permission_level(sender).await {
-                        gmts.chat_to_id(&format!("Your permission level is {}.", p), -1, sender)
-                            .await;
+                        gmts.chat_to_id(&format!("Your permission level is {}.", p), -1, sender).await;
                     } else {
                         return 3;
                     };

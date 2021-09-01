@@ -2,8 +2,9 @@
 # It is not intended for manual editing.
 [[package]]
 name = "BetterThanMinecraft"
-version = "0.3.1-alpha"
+version = "0.3.2-alpha"
 dependencies = [
+ "async-compression",
  "base-62",
  "bytes",
  "chrono",
@@ -11,6 +12,7 @@ dependencies = [
  "env_logger",
  "flate2",
  "futures",
+ "glob",
  "hex",
  "hyper",
  "hyper-tls",
@@ -23,6 +25,8 @@ dependencies = [
  "once_cell",
  "perlin_noise",
  "rand 0.6.5",
+ "rlua",
+ "rlua-async",
  "serde",
  "serde_derive",
  "tokio",
@@ -59,6 +63,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e37cfd5e7657ada45f742d6e99ca5788580b5c529dc78faf11ece6dc702656f"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "async-compression"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5443ccbb270374a2b1055fc72da40e1f237809cd6bb0e97e66d264cd138473a6"
+dependencies = [
+ "futures-core",
+ "memchr",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -124,6 +139,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4152116fd6e9dadb291ae18fc1ec3575ed6d84c29642d97890f4b4a3417297e4"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "bstr"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90682c8d613ad3373e66de8c6411e0ae2ab2571e879d2efbf73558cc66f21279"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -438,6 +462,12 @@ name = "gimli"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0a01e0497841a3b2db4f8afa483cce65f7e96a3498bd6c541734792aeac8fe7"
+
+[[package]]
+name = "glob"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
 name = "h2"
@@ -1090,6 +1120,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlua"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25fa5b2c667bae0b6218361e96d365e414fe4a0fa80f476b9631aa2dea2c6881"
+dependencies = [
+ "bitflags",
+ "bstr",
+ "cc",
+ "libc",
+ "num-traits",
+]
+
+[[package]]
+name = "rlua-async"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2350982b618933f48c3e3f11437a4acd1b611e8d5085289e48ff9787285ba4b"
+dependencies = [
+ "futures",
+ "rlua",
+ "scoped-tls",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1104,6 +1158,12 @@ dependencies = [
  "lazy_static",
  "winapi",
 ]
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6a9290e3c9cf0f18145ef7ffa62d68ee0bf5fcd651017e586dc7fd5da448c2"
 
 [[package]]
 name = "scopeguard"
