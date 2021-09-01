@@ -19,6 +19,13 @@ To register a new command, do:
 ```
 register_command(command: string, arguments: string, description: string, function: string)
 ```
+So, for creating a command called `test`, that will print "Hello World!", you would do:
+
+```
+register_command("test", "", "Print \"Hello, world!\"", string.format([[
+    chat_to_id(sender_id, "Hello World!")
+]]))
+```
 Functions usable within a registered command:
 ```
 chat_broadcast(msg: string) - Broadcast a chat message
