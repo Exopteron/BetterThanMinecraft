@@ -1,0 +1,331 @@
+use crate::*;
+use super::game::GMTS;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use crate::game::*;
+use crate::settings::*;
+use game::*;
+use std::{
+    collections::HashMap,
+    env,
+    io::Error as IoError,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
+use tokio::runtime::Builder;
+use classic::*;
+use tokio::io::{AsyncWriteExt, AsyncReadExt};
+use tokio::net::{TcpListener, TcpStream};
+use futures_util::SinkExt;
+use futures_channel::mpsc::{unbounded, UnboundedSender};
+use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
+use tokio_tungstenite::tungstenite::protocol::Message;
+pub async fn main(gmts: Arc<GMTS>) {
+    let listener = TcpListener::bind("0.0.0.0:4206").await.unwrap();
+    loop {
+        let possible = listener.accept().await;
+        if possible.is_err() {
+          continue;
+        }
+        let (stream, _) = possible.unwrap();
+        let ws_stream = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let gmts = gmts.clone();
+        tokio::task::spawn(async move {
+            if let None = websocket_incoming_connection_handler(ws_stream, gmts).await {
+              log::error!("Player join error!");
+            }
+        });
+    }
+} 
+pub struct ExoWebSocket {
+    pub socket: tokio_tungstenite::WebSocketStream<TcpStream>,
+    buffer: Vec<u8>,
+}
+impl ExoWebSocket {
+    pub fn new(socket: tokio_tungstenite::WebSocketStream<TcpStream>) -> Self {
+        Self { socket, buffer: Vec::new() }
+    }
+    pub async fn read_message(&mut self) -> Option<std::io::Cursor<Vec<u8>>> {
+        let packet = self.socket.try_next().await.unwrap()?;
+        let packet = if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = packet {
+            bytes
+        } else {
+            return None;
+        };
+        Some(std::io::Cursor::new(packet))
+    }
+    pub async fn write_message(&mut self, message: &[u8]) -> Option<()> {
+        let message = tokio_tungstenite::tungstenite::Message::binary(message);
+        self.socket.send(message).await.ok()?;
+        Some(())
+    }
+}
+async fn websocket_incoming_connection_handler(mut stream: tokio_tungstenite::WebSocketStream<TcpStream>, gmts: Arc<GMTS>) -> Option<()> {
+    let mut stream = ExoWebSocket::new(stream);
+    let mut packet = stream.read_message().await?;
+    let mut test = Box::pin(&mut packet);
+    let spawn_position = gmts.get_spawnpos().await?;
+    let packet = ClassicPacketReader::read_packet_reader(&mut test, "unknown")
+      .await
+      .ok()?;
+    let (msg_send, recv) = mpsc::channel::<PlayerCommand>(100);
+    drop(test);
+    if let classic::Packet::PlayerIdentification {
+      p_ver,
+      user_name,
+      v_key,
+      cpe_id,
+    } = packet
+    {
+      if CONFIGURATION.authenticate_usernames {
+        let x = if let Some(l) = gmts.get_value("Coreutils_HeartbeatSalt").await {
+            l
+        } else {
+            log::error!("Verify name error!");
+            return None;
+        };
+        let salt = if let Some(l) = x.val.downcast_ref::<String>() {
+            l
+        } else {
+            log::error!("Verify name error!");
+            return None;
+        };
+        use md5::{Md5, Digest};
+        let mut hasher = Md5::new();
+        hasher.update(salt);
+        hasher.update(user_name.clone());
+        let hash = hasher.finalize().to_vec();
+        let hash = hex::encode(&hash);
+        if v_key != hash {
+            log::info!("Bad authentication! Got {}, expected {}!", v_key, hash);
+            let packet = crate::classic::Packet::Disconnect {
+                reason: "Could not authenticate.".to_string(),
+            };
+            stream
+                .write_message(&ClassicPacketWriter::serialize(packet).ok()?)
+                .await?;
+            return None;
+        }
+    }
+    let banlist = settings::get_banlist();
+    for ban in banlist {
+        if ban.username == user_name {
+            let packet = crate::classic::Packet::Disconnect {
+                reason: ban.reason.clone(),
+            };
+            stream
+                .write_message(&ClassicPacketWriter::serialize(packet).ok()?)
+                .await?;
+            log::info!("{} is banned for {}!", ban.username, ban.reason);
+            return None;
+        }
+    }
+      if user_name.len() >= 20 {
+        let packet = classic::Packet::Disconnect {
+          reason: "Name too long!".to_string(),
+        };
+        stream
+          .write_message(&ClassicPacketWriter::serialize(packet).ok()?)
+          .await?;
+        log::info!(r#"{} tried to join with a too long name!"#, user_name);
+        return None;
+      }
+      let our_id = gmts.get_unused_id().await?;
+      let data = PlayerData {
+        position: Some(spawn_position.clone()),
+        held_block: None,
+      };
+      let mut permission_level: usize;
+      let mut op: bool;
+      let cpe = match cpe_id {
+        0x42 => true,
+        _ => false,
+      };
+      permission_level = 1;
+      op = false;
+      let op_list = settings::get_ops();
+      for op_name in op_list {
+        if user_name == op_name {
+          permission_level = 4;
+          op = true;
+        }
+      }
+      let mut supported_extensions: Option<HashMap<String, CPEExtensionData>> = None;
+      if cpe {
+        let extensions = gmts.get_extensions().await;
+        let ext_info = classic::Packet::ExtInfo {
+          appname: format!("BetterThanMinecraft v{}", VERSION),
+          extension_count: extensions.len() as i16,
+        };
+        stream
+          .write_message(&ClassicPacketWriter::serialize(ext_info).ok()?)
+          .await?;
+        for (extension, data) in extensions {
+          let ext_entry = classic::Packet::ExtEntry {
+            extname: extension.to_string(),
+            version: data.version as i32,
+          };
+          stream
+            .write_message(&ClassicPacketWriter::serialize(ext_entry).ok()?)
+            .await?;
+        }
+        let mut packet = stream.read_message().await?;
+        let mut test = Box::pin(&mut packet);
+        let (_, extcount) = if let classic::Packet::ExtInfo {
+          appname,
+          extension_count,
+        } = ClassicPacketReader::read_packet_reader(&mut test, &user_name)
+          .await
+          .ok()?
+        {
+          (appname, extension_count)
+        } else {
+          return None;
+        };
+        let mut packet = stream.read_message().await?;
+        let mut test = Box::pin(&mut packet);
+        let mut client_supported_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
+        for _ in 0..extcount {
+          let (extname, version) = if let classic::Packet::ExtEntry { extname, version } =
+            ClassicPacketReader::read_packet_reader(&mut test, &user_name)
+              .await
+              .ok()?
+          {
+            (extname, version)
+          } else {
+            return None;
+          };
+          let data = CPEExtensionData {
+            version: version as usize,
+            required: false,
+          };
+          client_supported_extensions.insert(extname, data);
+        }
+        let mut required_extensions: HashMap<String, CPEExtensionData> = HashMap::new();
+        for (extension, data) in extensions {
+          if data.required {
+            required_extensions.insert(extension.to_string(), data.clone());
+          }
+        }
+        for (extension, data) in required_extensions {
+          if client_supported_extensions.get(&extension).is_none()
+            || client_supported_extensions.get(&extension).unwrap().version != data.version
+          {
+            let packet = classic::Packet::Disconnect {
+              reason: "Missing required extensions.".to_string(),
+            };
+            stream
+              .write_message(&ClassicPacketWriter::serialize(packet).ok()?)
+              .await?;
+            log::info!("{} is missing required extensions.", user_name);
+            return None;
+          }
+        }
+        let mut super_supported_extensions = HashMap::new();
+        for (extension, data) in client_supported_extensions {
+          if extensions.get(&extension).is_some()
+            && extensions.get(&extension).unwrap().version == data.version
+          {
+            super_supported_extensions.insert(extension, data);
+          }
+        }
+        supported_extensions = Some(super_supported_extensions);
+      } else if *gmts.cpe_required().await {
+        let packet = classic::Packet::Disconnect {
+          reason: "This server requires the use of CPE.".to_string(),
+        };
+        stream
+          .write_message(&ClassicPacketWriter::serialize(packet).ok()?)
+          .await?;
+        log::info!("{} doesn't support CPE.", user_name);
+        return None;
+      }
+      let player_count = gmts.player_count().await?;
+    if player_count + 1 > CONFIGURATION.max_players && (permission_level < 4 || player_count + 1 >= 127 || !CONFIGURATION.admin_slot ) {
+      let packet = classic::Packet::Disconnect {
+        reason: "Server is full!".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await
+        .ok()?;
+      log::info!("Kicked {} because the server is full.", user_name);
+      return None;
+    }
+    let x = gmts.get_value("Coreutils_Whitelist").await?;
+    let whitelist = x.val.downcast_ref::<(bool, Vec<String>)>()?;
+    let (whitelist_enabled, whitelist) = whitelist.clone();
+    //let whitelist = settings::get_whitelist();
+    let mut in_whitelist = false;
+    for person in whitelist {
+      if user_name == person {
+        in_whitelist = true;
+      }
+    }
+    if !in_whitelist && permission_level < 4 && whitelist_enabled {
+      let packet = classic::Packet::Disconnect {
+        reason: "You are not white-listed on this server!".to_string(),
+      };
+      stream
+        .write_all(&ClassicPacketWriter::serialize(packet).ok()?)
+        .await
+        .ok()?;
+      log::info!("{} is not whitelisted.", user_name);
+      return None;
+    }
+    if let Some(_) = gmts
+    .kick_user_by_name(&user_name, "You logged in from another location")
+    .await
+  {
+    log::info!(
+      "{} was already logged in! Kicked other instance.",
+      user_name
+    );
+  }
+      let player = Player {
+        data: data,
+        op,
+        permission_level,
+        entity: true,
+        id: our_id,
+        name: user_name.clone(),
+        message_send: msg_send.clone(),
+        supported_extensions,
+      };
+      gmts.register_user(player).await?;
+      if let None = internal_inc_handler(
+        stream,
+        gmts.clone(),
+        recv,
+        &user_name.clone(),
+        our_id as u32,
+        p_ver,
+        v_key.to_string(),
+        op,
+        cpe,
+      )
+      .await
+      {
+        let hooks = gmts.get_ondisconnect_hooks().await;
+        for hook in &*hooks {
+          hook(gmts.clone(), our_id as i8).await;
+        }
+        if let None = gmts.remove_user(our_id as i8).await {
+          log::error!("Error removing user.");
+        }
+        if let None = gmts.return_id(our_id as i8).await {
+          log::error!("Error returning id.");
+        }
+        if let None = gmts
+          .chat_broadcast(&format!("&e{} left the game.", user_name), -1)
+          .await
+        {
+          log::error!("Error broadcasting chat message.");
+        }
+      }
+    } else {
+      log::info!("G");
+      return None;
+    }
+    Some(())
+  }

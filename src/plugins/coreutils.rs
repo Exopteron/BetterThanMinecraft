@@ -4,6 +4,7 @@ use crate::settings;
 pub struct CoreUtils {}
 use crate::CONFIGURATION;
 use std::sync::Arc;
+use tokio::signal;
 /*
 
 Command plan:
@@ -39,6 +40,33 @@ impl crate::game::Plugin for CoreUtils {
                     },
                 )
                 .await;
+                let cc_gmts = gmts.clone();
+                tokio::spawn(async move {
+                  signal::ctrl_c().await.unwrap();
+                  std::process::exit(0);
+                  cc_gmts.chat_to_permlevel(
+                    &format!("&d[{}: Starting world save..]", crate::SERVER_CONSOLE_NAME),
+                    -1,
+                    4,
+                )
+                .await;
+                if let None = cc_gmts.save_world().await {
+                    cc_gmts.chat_to_permlevel(
+                        &format!("&d[{}: Error saving the world.]", crate::SERVER_CONSOLE_NAME),
+                        -1,
+                        4,
+                    )
+                    .await;
+                    return 3;
+                }
+                cc_gmts.chat_to_permlevel(
+                    &format!("&d[{}: Save complete.]", crate::SERVER_CONSOLE_NAME),
+                    -1,
+                    4,
+                )
+                .await;
+                std::process::exit(0); 
+                });
                 if CONFIGURATION.autosave.enabled {
                     let as_gmts = gmts.clone();
                     tokio::spawn(async move {
@@ -99,7 +127,7 @@ impl crate::game::Plugin for CoreUtils {
                                 true => "True",
                                 false => "False",
                             };
-                            let request = format!("GET /heartbeat.jsp?port={port}&max={maxplayers}&name={servername}&public={public}&version=7&salt={salt}&users={online}&software={software_ver} HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt, port = port, maxplayers = CONFIGURATION.max_players, servername = urlencoding::encode(&CONFIGURATION.server_name), online = online_players, public = public, software_ver = urlencoding::encode(&format!("BTM v{}.", crate::VERSION)));
+                            let request = format!("GET /heartbeat.jsp?port={port}&max={maxplayers}&name={servername}&public={public}&version=7&salt={salt}&users={online}&software={software_ver}&web=true HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt, port = "35565", maxplayers = CONFIGURATION.max_players, servername = urlencoding::encode(&CONFIGURATION.server_name), online = online_players, public = public, software_ver = urlencoding::encode(&format!("BTM v{}.", crate::VERSION)));
                             extern crate native_tls;
                             use native_tls::TlsConnector;
                             let connector = TlsConnector::new().unwrap();

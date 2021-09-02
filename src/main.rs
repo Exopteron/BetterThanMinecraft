@@ -32,6 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 // HINT: Message passing is god and it's optimised.
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 const SERVER_CONSOLE_NAME: &str = "Server";
+mod websockets;
 mod chunks;
 pub mod classic;
 pub mod plugins;
@@ -190,8 +191,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   
     //example(&gmts);
   
-    let listener = TcpListener::bind(&CONFIGURATION.listen_address).await?;
+    let listener = match TcpListener::bind(&CONFIGURATION.listen_address).await {
+      Ok(l) => l,
+      Err(e) => {
+        match e.kind() {
+          tokio::io::ErrorKind::AddrInUse {} => {
+            log::error!("Address is already in use! Try binding to another port.");
+            std::process::exit(1);
+          }
+          _ => {
+            log::error!("Error binding to listener: {:?}", e);
+            std::process::exit(1);
+          }
+        }
+      }
+    };
     log::info!("Server listening on {}", CONFIGURATION.listen_address);
+    let gmts2 = gmts.clone();
+    tokio::spawn(async move {
+      websockets::main(gmts2).await;
+    });
     loop {
       let possible = listener.accept().await;
       if possible.is_err() {

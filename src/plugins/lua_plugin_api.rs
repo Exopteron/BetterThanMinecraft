@@ -85,7 +85,7 @@ impl crate::game::Plugin for LuaPluginAPI {
                                                 iternum += 1;
                                             }
                                             globals.set("cmd_args", args_table).unwrap();
-                                            lua_ctx.scope(|scope| {
+                                            let executor = lua_ctx.scope(|scope| {
                                                 globals.set("return_number", 0).unwrap();
                                                 globals.set("sender_id", sender).unwrap();
                                                 // Logger module
@@ -252,9 +252,67 @@ impl crate::game::Plugin for LuaPluginAPI {
                                                 }).unwrap()).unwrap();
                                                 globals.set("players", players_module).unwrap();
 
+                                                // Storage module
+                                                let gmts2 = gmts.clone();
+                                                let handle2 = handle.clone();
+                                                let storage_module = lua_ctx.create_table().unwrap();
+                                                storage_module.set("new_value", scope.create_function_mut(move |_, (key, value): (String, String) | {
+                                                    let gmts = gmts2.clone();
+                                                    let handle = handle2.clone();
+                                                    handle.block_on(async move {
+                                                        gmts.new_value(&key, GMTSElement { val: Arc::new(Box::new(value)) }).await;
+                                                    });
+                                                    Ok(())
+                                                }).unwrap()).unwrap();
+                                                let gmts2 = gmts.clone();
+                                                let handle2 = handle.clone();
+                                                storage_module.set("get_value", scope.create_function_mut(move |_, key: String| {
+                                                    let gmts = gmts2.clone();
+                                                    let handle = handle2.clone();
+                                                    let (tx, mut rx) = tokio::sync::oneshot::channel();
+                                                    handle.block_on(async move {
+                                                        tx.send(gmts.get_value(&key).await).ok().unwrap();
+                                                    });
+            
+                                                    let p_level: GMTSElement; //= gmts.get_username(id).await.unwrap();
+                                                    loop {
+                                                        let x = match rx.try_recv() {
+                                                            Ok(v) => v,
+                                                            Err(_) => {
+                                                                continue;
+                                                            }
+                                                        };
+                                                        let x = match x {
+                                                            Some(x) => x,
+                                                            None => {
+                                                                return Err(rlua::Error::external(std::io::Error::new(std::io::ErrorKind::Other, "Value does not exist!")));
+                                                            }
+                                                        };
+                                                        p_level = x;
+                                                        break;
+                                                    }
+                                                let p_level = if let Some(l) =
+                                                    p_level.val.downcast_ref::<String>()
+                                                {
+                                                    l
+                                                } else {
+                                                    return Err(rlua::Error::external(std::io::Error::new(std::io::ErrorKind::Other, "Not accessible from Lua!")));
+                                                };
+                                                    return Ok(p_level.clone());
+                                                }).unwrap()).unwrap();
+                                                globals.set("storage", storage_module).unwrap();
+
+
                                                 lua_ctx.load(function.as_bytes()).exec()
-                                            }).unwrap();
+                                            });
                                             return_value = globals.get::<_, usize>("return_number").unwrap();
+                                            match executor {
+                                                Ok(_) => {},
+                                                Err(e) => {
+                                                    log::error!("Script error! Details: {:?}", e);
+                                                    return_value = 3;
+                                                }
+                                            }
                                         });
                                         return_value
                                     });

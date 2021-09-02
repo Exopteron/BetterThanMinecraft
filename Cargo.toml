@@ -39,3 +39,5 @@ async-compression = "0.3.8"
 rlua = "0.17.0"
 glob = "0.3.0"
 rlua-async = "0.4.0"
+async-tungstenite = { version = "0.12", features = ["tokio-runtime"] }
+ws_stream_tungstenite = { version = "0.5.0", features = ["tokio"] }
