@@ -597,7 +597,7 @@ impl CMDGMTS {
             .ok()?;
         res_recv.await.ok()?
     }
-    pub async fn get_world(&self) -> Option<World> {
+    pub async fn get_world(&self) -> Option<ChunkedWorld> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::GetWorld { res_send })
@@ -1095,12 +1095,12 @@ impl GMTS {
                 std::process::exit(1);
             }
             let mut world =
-                World::from_file(&super::CONFIGURATION.world_file).expect("Failed to init world");
+                ChunkedWorld::from_file(&super::CONFIGURATION.world_file).expect("Failed to init world");
             log::info!("Finished initializing world");
             loop {
                 match recv.recv().await.unwrap() {
                     WorldCommand::GetBlock { pos, res_send } => {
-                        if let Some(id) = world.get_block(pos.x, pos.y, pos.z) {
+                        if let Some(id) = world.get_block(pos.x, pos.y, pos.z).await {
                             let block = Block { position: pos, id };
                             res_send.send(Some(block)).expect(ERR_SENDING_RESULT);
                         } else {
@@ -1149,7 +1149,7 @@ impl GMTS {
                             sender_id = x.1;
                         }
                         if !none {
-                            if let Some(_) = world.set_block(block.clone()) {
+                            if let Some(_) = world.set_block(block.clone()).await {
                                 let (res_send2, res_recv2) = oneshot::channel();
                                 if let Ok(_) = players_send.send(PlayersCommand::PassMessageToAll {
                                     message: PlayerCommand::SetBlock { block },
@@ -2129,7 +2129,7 @@ impl GMTS {
             .ok()?;
         res_recv.await.ok()?
     }
-    pub async fn get_world(&self) -> Option<World> {
+    pub async fn get_world(&self) -> Option<ChunkedWorld> {
         let (res_send, res_recv) = oneshot::channel();
         self.world_send
             .send(WorldCommand::GetWorld { res_send })
@@ -2248,7 +2248,7 @@ pub enum WorldCommand {
         res_send: oneshot::Sender<Option<()>>,
     },
     GetWorld {
-        res_send: oneshot::Sender<World>,
+        res_send: oneshot::Sender<ChunkedWorld>,
     },
     GetSpawnPosition {
         res_send: oneshot::Sender<Option<PlayerPosition>>,

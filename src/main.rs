@@ -32,7 +32,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 // HINT: Message passing is god and it's optimised.
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 const SERVER_CONSOLE_NAME: &str = "Server";
-mod websockets;
 mod chunks;
 pub mod classic;
 pub mod plugins;
@@ -190,7 +189,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pass around immutable references, and clone the sender.
   
     //example(&gmts);
-  
+/*     let mut world = chunks::ChunkedWorld::from_file("mirror.cw").unwrap();
+    world.set_block(Block { position: BlockPosition { x: 0, y: 0, z: 0}, id: 69}).await;
+    log::info!("got back: {}", world.get_block(0, 0, 0).await.unwrap()); */
     let listener = match TcpListener::bind(&CONFIGURATION.listen_address).await {
       Ok(l) => l,
       Err(e) => {
@@ -208,9 +209,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     log::info!("Server listening on {}", CONFIGURATION.listen_address);
     let gmts2 = gmts.clone();
-    tokio::spawn(async move {
-      websockets::main(gmts2).await;
-    });
     loop {
       let possible = listener.accept().await;
       if possible.is_err() {
