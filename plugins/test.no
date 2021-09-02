@@ -41,3 +41,33 @@ register_command("fill", "x1, y1, z1, x2, y2, z2, id", "Fill an area with blocks
     end
   end
 ]]))
+
+register_command("replace", "x1, y1, z1, x2, y2, z2, id_from, id_to", "Fill an area with blocks.", string.format([[
+  if #cmd_args < 8 then
+    return_number = 1
+  else
+    x1 = tonumber(cmd_args[1])
+    y1 = tonumber(cmd_args[2])
+    z1 = tonumber(cmd_args[3])
+    x2 = tonumber(cmd_args[4])
+    y2 = tonumber(cmd_args[5])
+    z2 = tonumber(cmd_args[6])
+    id_from = tonumber(cmd_args[7])
+    id_to = tonumber(cmd_args[8])
+    
+    for xpos = x1, x2 do
+      for zpos = y1, y2 do
+        for ypos = z1, z2 do
+          id = get_block(xpos, ypos, zpos)
+          if id == id_from then
+            set_block(xpos, ypos, zpos, id_to)
+          end
+        end
+      end
+    end
+  end
+]]))
+
+register_chat_hook(string.format([[
+    sent_message = "aeiou"
+]]))

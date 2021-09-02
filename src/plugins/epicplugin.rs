@@ -58,10 +58,14 @@ impl crate::game::Plugin for EpicPlugin {
         }
         let lua = Lua::new();
         let mut lua_reg_commands = vec![];
+        let mut lua_chat_hooks = vec![];
         lua.context(|lua_ctx| {
             let globals = lua_ctx.globals();
             let command_table = lua_ctx.create_table().unwrap();
             globals.set("command_table", command_table).unwrap();
+
+            let chat_hook_table = lua_ctx.create_table().unwrap();
+            globals.set("chat_hook_table", chat_hook_table).unwrap();
             let loginfo = lua_ctx
                 .create_function(|_, (string): (String)| {
                     log::info!("{}", string);
@@ -76,6 +80,9 @@ impl crate::game::Plugin for EpicPlugin {
                 function: String,
             }
             impl UserData for LuaCommand {}
+            #[derive(Clone, Debug)]
+            struct LuaChatHook { function: String }
+            impl UserData for LuaChatHook {}
             let register_command = lua_ctx
                 .create_function(
                     |lua_ctx, (command, args, desc, function): (String, String, String, String)| {
@@ -98,6 +105,26 @@ impl crate::game::Plugin for EpicPlugin {
                 )
                 .unwrap();
             globals.set("register_command", register_command).unwrap();
+
+            let register_chat_hook = lua_ctx
+            .create_function(
+                |lua_ctx, (function): (String)| {
+                    let globals = lua_ctx.globals();
+                    let chat_hook_table: rlua::Table = globals.get("chat_hook_table").unwrap();
+                    let len = chat_hook_table.len().unwrap();
+                    chat_hook_table
+                        .set(
+                            len + 1,
+                            LuaChatHook {
+                                function,
+                            },
+                        )
+                        .unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        globals.set("register_chat_hook", register_chat_hook).unwrap();
             // globals.set("loginfo", loginfo).unwrap();
             for script in lua_scripts {
                 match lua_ctx.load(&script).exec().ok() {
@@ -111,6 +138,12 @@ impl crate::game::Plugin for EpicPlugin {
             for pair in command_table.pairs::<rlua::Value, LuaCommand>() {
                 let (key, value) = pair.unwrap();
                 lua_reg_commands.push(value);
+                //log::info!("k, v: {:?} {:?}", key, value);
+            }
+            let chat_hook_table: rlua::Table = globals.get("chat_hook_table").unwrap();
+            for pair in chat_hook_table.pairs::<rlua::Value, LuaChatHook>() {
+                let (key, value) = pair.unwrap();
+                lua_chat_hooks.push(value);
                 //log::info!("k, v: {:?} {:?}", key, value);
             }
         });
@@ -180,7 +213,9 @@ impl crate::game::Plugin for EpicPlugin {
                                         let gmts = gmts2.clone();
                                         let gmts = gmts.clone();
                                         handle.block_on(async move {
-                                            gmts.tp_id_pos(id, PlayerPosition::from_pos(x as u16, y as u16, z as u16)).await
+                                            if let None = gmts.tp_id_pos(id, PlayerPosition::from_pos(x as u16, y as u16, z as u16)).await {
+                                                log::error!("Error teleporting player!");
+                                            }
                                         });
 /*                                         let globals = lua_ctx.globals();
                                         let lua_cmds: rlua::Table =
@@ -461,6 +496,63 @@ impl crate::game::Plugin for EpicPlugin {
             );
             //log::info!("Command: {:?}", command);
         }
+        let lua_chat_hooks = Arc::new(lua_chat_hooks.clone());
+        pre_gmts.register_packet_hook(0x0d, Box::new(move |gmts, stream, packet_id, sender_id| {
+            let handle = Handle::current();
+            let handle = handle.clone();
+            let lua_chat_hooks = lua_chat_hooks.clone();
+            Box::pin(async move {
+                let mut stream = stream.lock().await;
+                if let crate::classic::Packet::MessageC { message, unused } = ClassicPacketReader::read_packet_reader(&mut Box::pin(&mut *stream), "g").await.ok()? {
+                    let our_username = gmts.get_username(sender_id as i8).await?;
+                    let our_id = sender_id;
+                    if message.starts_with("/") {
+                        gmts.execute_command(our_id as i8, message).await;
+                      } else {
+                        let mut message = message;
+                        for function in &*lua_chat_hooks {
+                            let lua = Lua::new();
+                            let handle = handle.clone();
+                            lua.context(|lua_ctx| {
+                                let globals = lua_ctx.globals();
+                                globals.set("sent_message", message.clone()).unwrap();
+                                lua_ctx.load(function.function.as_bytes()).exec().unwrap();
+                                message = globals.get::<_, String>("sent_message").unwrap();
+                            });
+                        }
+                        let mut prefix = format!("<{}> ", our_username);
+                        prefix.push_str(&message);
+                        let message = prefix;
+                        let perm_level = if let Some(l) = gmts.get_permission_level(our_id as i8).await {
+                          l
+                        } else {
+                          return Some(());
+                        };
+                        let can_color = match perm_level {
+                          l if l < crate::CONFIGURATION.chat_colour_perm_level => false,
+                          _ => true,
+                        };
+                        let message = crate::handle_mc_colours(&message, can_color);
+                        let message = message.as_bytes().to_vec();
+                        let message = message.chunks(64).collect::<Vec<&[u8]>>();
+                        let mut msg2 = vec![];
+                        for m in message {
+                          msg2.push(String::from_utf8_lossy(&m).to_string());
+                        }
+                        let m = msg2.remove(0);
+
+                        for m in msg2 {                        gmts.chat_broadcast(&m, (our_id as u8) as i8).await;
+                          gmts
+                            .chat_broadcast(&format!("> {}", m), (our_id as u8) as i8)
+                            .await;
+                        }
+                      }
+                    return Some(());
+            } else {
+                return None;
+            }
+            })
+        }));
         /*         pre_gmts.cpe_handler.custom_block_support_level(1);
         pre_gmts.register_command(
             "holdblock".to_string(),

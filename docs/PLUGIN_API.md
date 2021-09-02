@@ -4,12 +4,11 @@ Documentation for my experimental Lua Plugin API.
 # Command documentation:
 Example command:
 ```lua
-register_command("luasay", "(message)", "Send a message from lua!", string.format([[
+game.register_command("luasay", "(message)", "Send a message from lua!", string.format([[
 if #cmd_args < 1 then
     return_number = 1
 else
-    chat_broadcast(get_username(sender_id) .. " says: " .. table.concat(cmd_args, " "))
-    set_block(0, 0, 0, 50)
+    chat.broadcast(players.get_username(sender_id) .. " says: " .. table.concat(cmd_args, " "))
 end
 ]]))
 ```
@@ -17,25 +16,38 @@ end
 ## register_command documentation:
 To register a new command, do:
 ```
-register_command(command: string, arguments: string, description: string, function: string)
+game.register_command(command: string, arguments: string, description: string, function: string)
 ```
 So, for creating a command called `test`, that will print "Hello World!", you would do:
 
 ```
-register_command("test", "", "Print \"Hello, world!\"", string.format([[
-    chat_to_id(sender_id, "Hello World!")
+game.register_command("test", "", "Print \"Hello, world!\"", string.format([[
+    chat.send_to_id(sender_id, "Hello World!")
 ]]))
 ```
-Functions usable within a registered command:
+### Modules usable within a registered command:
+Logger module:
 ```
-chat_broadcast(msg: string) - Broadcast a chat message
-chat_to_id(id: i8, msg: string) - Send a chat message to an ID.
-set_block(x: i16, y: i16, z: i16, id: u8) - Set a block in the world.
-get_block(x: i16, y: i16, z: i16) => u8 - Get a block ID from coordinates.
-get_username(id: i8) => string - Get the username corresponding to an ID.
-get_id(username: string) => i8 - Get the ID corresponding to a username.
-get_perm_level(id: i8) => usize - Get the permission level of an ID.
-teleport_id_pos(x: i16, y: i16, z: i16, id: i8) - Teleport an ID to a position.
+logger.info(msg: string) - Info log
+logger.warn(msg: string) - Warn log
+logger.debug(msg: string) - Debug log
+logger.error(msg: String) - Error log
+```
+Chat module:
+```
+chat.broadcast(msg: string) - Broadcast a chat message
+chat.send_to_id(id: i8, msg: string) - Send a chat message to an ID
+```
+World module:
+```
+world.get_block(x: i16, y: i16, z: i16) - Get a block in the world
+world.set_block(x: i16, y: i16, z: i16, id: u8) - Set a block in the world
+```
+Players module:
+```
+players.get_username(id: i8) - Get the username corresponding to an ID.
+players.get_id(username: string) - Get the ID corresponding to a username.
+players.perm_level(id: i8) - Get the permission level of an ID.
 ```
 Global variables accessible within a registered command:
 ```
